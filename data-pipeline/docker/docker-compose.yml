@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  covid-analysis:
+    build: .
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/workspace/data
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - PYTHONPATH=/workspace
+    working_dir: /workspace
+    restart: unless-stopped
+    
