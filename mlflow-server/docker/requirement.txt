@@ -1,0 +1,15 @@
+# Core
+numpy==2.1.1
+pandas==2.2.2
+scikit-learn==1.5.1
+mlflow==2.15.1
+python-dotenv==1.0.1
+
+# Dev/Notebook
+jupyterlab==4.2.5
+ipykernel==6.29.5
+matplotlib==3.9.2
+
+# Utils
+pyyaml==6.0.2
+requests==2.32.3
