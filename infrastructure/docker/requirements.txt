@@ -36,6 +36,10 @@ openpyxl>=3.1.0
 # COVID-19 데이터 관련
 covid>=2.4.0
 
+# MLOps 관련 (추가)
+mlflow>=2.8.0
+dvc>=3.0.0
+
 # Jupyter 관련
 jupyterlab>=4.0.0
 jupyter>=1.0.0

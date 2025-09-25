@@ -1,0 +1,33 @@
+# .dockerignore 파일 생성
+cat > .dockerignore << 'EOF'
+# 시스템 파일들 제외
+../data-pipeline/docker/workspace/.Trash-0
+**/.DS_Store
+**/Thumbs.db
+**/.git
+**/.gitignore
+**/.vscode
+**/.idea
+
+# Python 캐시 파일들
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+**/.pytest_cache
+
+# Jupyter 체크포인트
+**/.ipynb_checkpoints
+
+# 로그 파일들
+**/*.log
+**/logs
+
+# 임시 파일들
+**/tmp
+**/temp
+**/.tmp
+
+# Node modules (혹시 있다면)
+**/node_modules
+EOF

@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  covid-analysis:
+    image: hyuk12/covid-analysis:v2.1
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - PYTHONPATH=/workspace
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    working_dir: /workspace
+    restart: unless-stopped
+    depends_on:
+      - mlflow
+
+  mlflow:
+    image: hyuk12/mlflow:v2.0
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=file:///app/mlruns
+      - MLFLOW_ARTIFACTS_DESTINATION=file:///app/artifacts
+    restart: unless-stopped
