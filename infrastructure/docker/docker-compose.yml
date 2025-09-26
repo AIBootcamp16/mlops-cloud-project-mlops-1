@@ -2,23 +2,39 @@ version: '3.8'
 
 services:
   covid-analysis:
-    image: hyuk12/covid-analysis:v2.1
+    image: hyuk12/covid-analysis:v2.2
     ports:
       - "8888:8888"
     environment:
-      - JUPYTER_ENABLE_LAB=yes
-      - PYTHONPATH=/workspace
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - JUPYTER_ENABLE_LAB=${JUPYTER_ENABLE_LAB}
+      - PYTHONPATH=${PYTHONPATH}
+      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
+      # AWS 환경변수 (데이터 수집이나 직접 S3 접근 시에만 필요)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - S3_BUCKET=${S3_BUCKET}
     working_dir: /workspace
     restart: unless-stopped
     depends_on:
-      - mlflow
+      - mlflow-server
+    env_file:
+      - .env
 
-  mlflow:
-    image: hyuk12/mlflow:v2.0
+  mlflow-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
     ports:
       - "5000:5000"
     environment:
-      - MLFLOW_BACKEND_STORE_URI=file:///app/mlruns
-      - MLFLOW_ARTIFACTS_DESTINATION=file:///app/artifacts
+      # MLflow 서버 설정
+      - MLFLOW_BACKEND_STORE_URI=${MLFLOW_BACKEND_STORE_URI}
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=${MLFLOW_DEFAULT_ARTIFACT_ROOT}
+      # AWS 자격증명
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
     restart: unless-stopped
+    env_file:
+      - .env
