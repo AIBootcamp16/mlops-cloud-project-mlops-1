@@ -1,65 +1,34 @@
-# COVID-19 전염병 예측 및 백신 효과성 분석을 위한 Docker 이미지
+# infrastructure/docker/Dockerfile.analysis
 FROM python:3.11-slim
 
-# 환경 변수 설정
-ENV PYTHONUNBUFFERED=1
-ENV JUPYTER_ENABLE_LAB=yes
-
-# 시스템 패키지 설치
-RUN apt-get update && apt-get install -y \
-    git \
-    wget \
-    curl \
-    vim \
-    build-essential \
-    libgdal-dev \
-    gdal-bin \
-    libspatialindex-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 작업 디렉토리 생성
+ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /workspace
 
-# Python 라이브러리 설치용 requirements.txt 생성
-COPY requirements.txt .
+# 시스템 패키지 (Prophet, LightGBM, XGBoost, MLflow 빌드 시 필요)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential g++ make cmake git curl wget ca-certificates pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
-# Python 패키지 설치
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# 기본 requirements 설치 (core)
+COPY infrastructure/docker/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 필수 디렉토리 구조 생성
-RUN mkdir -p /workspace/data/raw && \
-    mkdir -p /workspace/data/processed && \
-    mkdir -p /workspace/notebooks && \
-    mkdir -p /workspace/src && \
-    mkdir -p /workspace/models && \
-    mkdir -p /workspace/results && \
-    mkdir -p /workspace/mlruns && \
-    mkdir -p /workspace/mlflow-artifacts && \
-    mkdir -p /workspace/config
+# (선택) 개발/주피터 환경
+COPY infrastructure/docker/requirements-dev.txt ./requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
-# 🎯 현재 디렉토리 구조에 맞춰 복사
-# workspace 디렉토리 전체 복사
-COPY workspace/ /workspace/
+# (선택) 지오스택 (GeoPandas 등, 필요시 활성화)
+# COPY infrastructure/docker/requirements-geo.txt ./requirements-geo.txt
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     gdal-bin libgdal-dev libgeos-dev libproj-dev \
+#     && pip install --no-cache-dir -r requirements-geo.txt \
+#     && rm -rf /var/lib/apt/lists/*
 
-# 🎯 MLflow 결과물 복사 (루트에서)
-COPY mlruns/ /workspace/mlruns/
-COPY mlflow-artifacts/ /workspace/mlflow-artifacts/
+# 프로젝트 코드 복사
+COPY data-pipeline/src ./src
 
-# 🎯 데이터 복사 (루트에서)
-COPY data/ /workspace/data/
+# PYTHONPATH 등록
+ENV PYTHONPATH=/workspace/src
 
-# Jupyter 설정 디렉토리 생성
-RUN mkdir -p /root/.jupyter
-
-# Jupyter 설정 파일 생성
-RUN echo "c.ServerApp.token = ''" > /root/.jupyter/jupyter_server_config.py && \
-    echo "c.ServerApp.password = ''" >> /root/.jupyter/jupyter_server_config.py && \
-    echo "c.ServerApp.allow_root = True" >> /root/.jupyter/jupyter_server_config.py && \
-    echo "c.ServerApp.ip = '0.0.0.0'" >> /root/.jupyter/jupyter_server_config.py
-
-# 포트 노출 (Jupyter Lab용)
 EXPOSE 8888
-
-# 기본 명령어
-CMD ["jupyter", "lab", "--port=8888", "--no-browser", "--allow-root", "--ip=0.0.0.0"]
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--allow-root", "--NotebookApp.token="]
