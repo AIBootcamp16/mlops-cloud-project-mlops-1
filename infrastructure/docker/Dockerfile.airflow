@@ -1,0 +1,56 @@
+# infrastructure/docker/Dockerfile.airflow
+FROM apache/airflow:2.9.3-python3.11
+
+# ---- Root 단계: 시스템 패키지 설치 및 작업 디렉터리 준비 ----
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONPATH=/workspace/src
+WORKDIR /workspace
+
+# Prophet/XGBoost/LightGBM 빌드용 툴체인
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential g++ make cmake git curl wget ca-certificates pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# (옵션) 지오스택 필요 시 주석 해제
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     gdal-bin libgdal-dev libgeos-dev libproj-dev \
+#     && rm -rf /var/lib/apt/lists/*
+
+# requirements 사전 복사 (권한: airflow)
+COPY --chown=airflow:0 infrastructure/docker/requirements.txt /workspace/requirements.txt
+# (옵션) 개발/지오 requirements가 있으면 함께 복사
+# COPY --chown=airflow:0 infrastructure/docker/requirements-dev.txt /workspace/requirements-dev.txt
+# COPY --chown=airflow:0 infrastructure/docker/requirements-geo.txt /workspace/requirements-geo.txt
+
+# ---- airflow 유저로 전환: pip 설치는 반드시 airflow에서! ----
+USER airflow
+
+# 핵심 패키지 설치 (Python 3.11 호환 핀닝된 버전)
+RUN pip install --no-cache-dir -r /workspace/requirements.txt
+
+# (옵션) 노트북/개발 툴
+# RUN pip install --no-cache-dir -r /workspace/requirements-dev.txt
+
+# (옵션) 지오스택 (위에서 시스템 라이브러리 설치했을 때만)
+# RUN pip install --no-cache-dir -r /workspace/requirements-geo.txt
+
+# 프로젝트 코드 복사 (DAG 포함). src/dags가 DAG 폴더로 스캔됨
+COPY --chown=airflow:0 data-pipeline/src /workspace/src
+
+# Airflow 환경 변수/경로
+ENV PROJECT_PATH=/workspace \
+    PYTHONPATH=/workspace/src \
+    AIRFLOW__CORE__DAGS_FOLDER=/workspace/src/dags \
+    AIRFLOW__CORE__LOAD_EXAMPLES=False \
+    AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+
+# 웹서버 + 스케줄러 동시 실행 (테스트/단일호스트 용)
+CMD ["bash", "-c", "\
+airflow db init && \
+airflow db migrate && \
+airflow users create --role Admin --username admin --password admin \
+  --firstname a --lastname b --email admin@example.com || true && \
+airflow webserver --port 8080 & \
+exec airflow scheduler \
+"]
