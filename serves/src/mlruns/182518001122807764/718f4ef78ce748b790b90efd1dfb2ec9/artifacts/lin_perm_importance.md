@@ -1,0 +1,22 @@
+| feature                        |   importance |
+|:-------------------------------|-------------:|
+| new_cases_rollstd14            |  0.681383    |
+| new_cases_rollstd7             |  0.311776    |
+| new_cases_diff1                |  0.152946    |
+| new_cases_rollmean7            |  0.0826187   |
+| new_cases_rollstd28            |  0.0311277   |
+| new_cases_lag1                 |  0.019443    |
+| new_cases_smoothed             |  0.0118394   |
+| new_cases_rollmean14           |  0.0110263   |
+| dayofyear                      |  0.00334227  |
+| weekofyear                     |  7.48237e-05 |
+| new_cases_lag7                 |  3.70741e-05 |
+| month_sin                      |  2.78155e-07 |
+| dow_cos                        |  0           |
+| dow_sin                        |  0           |
+| new_cases_pct                  |  0           |
+| month_cos                      | -1.19209e-07 |
+| new_cases_smoothed_per_million | -3.77099e-05 |
+| new_cases_per_million          | -8.49168e-05 |
+| new_cases_rollmean28           | -0.0114397   |
+| new_cases_lag14                | -0.0353206   |

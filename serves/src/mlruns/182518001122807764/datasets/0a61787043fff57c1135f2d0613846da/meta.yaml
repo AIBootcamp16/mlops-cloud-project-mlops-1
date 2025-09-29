@@ -1,0 +1,8 @@
+digest: 8c38980b
+name: dataset
+profile: '{"features_shape": [1, 20], "features_size": 20, "features_nbytes": 80}'
+schema: '{"mlflow_tensorspec": {"features": "[{\"type\": \"tensor\", \"tensor-spec\":
+  {\"dtype\": \"float32\", \"shape\": [-1, 20]}}]", "targets": null}}'
+source: '{"tags": {"mlflow.user": "zhcv3", "mlflow.source.name": "c:\\Users\\zhcv3\\anaconda3\\envs\\python3_11_9\\Lib\\site-packages\\ipykernel_launcher.py",
+  "mlflow.source.type": "LOCAL"}}'
+source_type: code

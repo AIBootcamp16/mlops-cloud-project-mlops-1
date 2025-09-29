@@ -1,0 +1,6 @@
+artifact_location: file:///c:/AIBootCamp/project/mlops/workspace/mlops-cloud-project-mlops-1/models/src/mlruns/182518001122807764
+creation_time: 1759112188567
+experiment_id: '182518001122807764'
+last_update_time: 1759112188567
+lifecycle_stage: active
+name: covid_timeseries_prophet_lstm

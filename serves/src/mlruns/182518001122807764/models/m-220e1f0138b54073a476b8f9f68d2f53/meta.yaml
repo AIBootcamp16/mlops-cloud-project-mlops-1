@@ -1,0 +1,10 @@
+artifact_location: file:///c:/AIBootCamp/project/mlops/workspace/mlops-cloud-project-mlops-1/models/src/mlruns/182518001122807764/models/m-220e1f0138b54073a476b8f9f68d2f53/artifacts
+creation_timestamp: 1759112195755
+experiment_id: '182518001122807764'
+last_updated_timestamp: 1759112196169
+model_id: m-220e1f0138b54073a476b8f9f68d2f53
+model_type: null
+name: model_rf
+source_run_id: ad20f3bd0faa46598063eef3c8bf3bcb
+status: 2
+status_message: null

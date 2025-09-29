@@ -1,0 +1,10 @@
+artifact_location: file:///c:/AIBootCamp/project/mlops/workspace/mlops-cloud-project-mlops-1/models/src/mlruns/182518001122807764/models/m-c357b41891fc492aac9aba36b2f47f00/artifacts
+creation_timestamp: 1759112190230
+experiment_id: '182518001122807764'
+last_updated_timestamp: 1759112190515
+model_id: m-c357b41891fc492aac9aba36b2f47f00
+model_type: null
+name: model_linear
+source_run_id: 44a3b48310a34d47afe56affc31656eb
+status: 2
+status_message: null

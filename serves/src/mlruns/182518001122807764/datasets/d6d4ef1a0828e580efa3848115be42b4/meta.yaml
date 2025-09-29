@@ -1,0 +1,44 @@
+digest: 5c654a2d
+name: train_dataset
+profile: '{"num_rows": 1200, "num_elements": 58800}'
+schema: '{"mlflow_colspec": [{"type": "datetime", "name": "date", "required": true},
+  {"type": "double", "name": "total_cases", "required": true}, {"type": "double",
+  "name": "new_cases", "required": true}, {"type": "double", "name": "new_cases_smoothed",
+  "required": true}, {"type": "double", "name": "total_cases_per_million", "required":
+  true}, {"type": "double", "name": "new_cases_per_million", "required": true}, {"type":
+  "double", "name": "new_cases_smoothed_per_million", "required": true}, {"type":
+  "double", "name": "total_deaths", "required": true}, {"type": "double", "name":
+  "new_deaths", "required": true}, {"type": "double", "name": "new_deaths_smoothed",
+  "required": true}, {"type": "double", "name": "total_deaths_per_million", "required":
+  true}, {"type": "double", "name": "new_deaths_per_million", "required": true}, {"type":
+  "double", "name": "new_deaths_smoothed_per_million", "required": true}, {"type":
+  "double", "name": "icu_patients", "required": true}, {"type": "double", "name":
+  "icu_patients_per_million", "required": true}, {"type": "double", "name": "stringency_index",
+  "required": true}, {"type": "double", "name": "reproduction_rate", "required": true},
+  {"type": "long", "name": "population", "required": true}, {"type": "double", "name":
+  "population_density", "required": true}, {"type": "double", "name": "median_age",
+  "required": true}, {"type": "double", "name": "life_expectancy", "required": true},
+  {"type": "double", "name": "gdp_per_capita", "required": true}, {"type": "double",
+  "name": "extreme_poverty", "required": true}, {"type": "double", "name": "diabetes_prevalence",
+  "required": true}, {"type": "double", "name": "hospital_beds_per_thousand", "required":
+  true}, {"type": "long", "name": "year", "required": true}, {"type": "long", "name":
+  "month", "required": true}, {"type": "long", "name": "day", "required": true}, {"type":
+  "boolean", "name": "country_South Korea", "required": true}, {"type": "boolean",
+  "name": "code_KOR", "required": true}, {"type": "boolean", "name": "continent_Asia",
+  "required": true}, {"type": "long", "name": "dow", "required": true}, {"type": "long",
+  "name": "weekofyear", "required": true}, {"type": "long", "name": "dayofyear", "required":
+  true}, {"type": "double", "name": "dow_sin", "required": true}, {"type": "double",
+  "name": "dow_cos", "required": true}, {"type": "double", "name": "month_sin", "required":
+  true}, {"type": "double", "name": "month_cos", "required": true}, {"type": "double",
+  "name": "new_cases_lag1", "required": true}, {"type": "double", "name": "new_cases_lag7",
+  "required": true}, {"type": "double", "name": "new_cases_lag14", "required": true},
+  {"type": "double", "name": "new_cases_rollmean7", "required": true}, {"type": "double",
+  "name": "new_cases_rollstd7", "required": true}, {"type": "double", "name": "new_cases_rollmean14",
+  "required": true}, {"type": "double", "name": "new_cases_rollstd14", "required":
+  true}, {"type": "double", "name": "new_cases_rollmean28", "required": true}, {"type":
+  "double", "name": "new_cases_rollstd28", "required": true}, {"type": "double", "name":
+  "new_cases_diff1", "required": true}, {"type": "double", "name": "new_cases_pct",
+  "required": true}]}'
+source: '{"tags": {"mlflow.user": "zhcv3", "mlflow.source.name": "c:\\Users\\zhcv3\\anaconda3\\envs\\python3_11_9\\Lib\\site-packages\\ipykernel_launcher.py",
+  "mlflow.source.type": "LOCAL"}}'
+source_type: code

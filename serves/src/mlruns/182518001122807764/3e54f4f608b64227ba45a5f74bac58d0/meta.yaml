@@ -1,0 +1,14 @@
+artifact_uri: file:///c:/AIBootCamp/project/mlops/workspace/mlops-cloud-project-mlops-1/models/src/mlruns/182518001122807764/3e54f4f608b64227ba45a5f74bac58d0/artifacts
+end_time: 1759112189166
+entry_point_name: ''
+experiment_id: '182518001122807764'
+lifecycle_stage: active
+run_id: 3e54f4f608b64227ba45a5f74bac58d0
+run_name: feature_engineering
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1759112188964
+status: 3
+tags: []
+user_id: zhcv3

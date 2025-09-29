@@ -1,0 +1,30 @@
+digest: 25a6f2cd
+name: raw_processed
+profile: '{"num_rows": 1260, "num_elements": 39060}'
+schema: '{"mlflow_colspec": [{"type": "string", "name": "date", "required": true},
+  {"type": "double", "name": "total_cases", "required": true}, {"type": "double",
+  "name": "new_cases", "required": true}, {"type": "double", "name": "new_cases_smoothed",
+  "required": true}, {"type": "double", "name": "total_cases_per_million", "required":
+  true}, {"type": "double", "name": "new_cases_per_million", "required": true}, {"type":
+  "double", "name": "new_cases_smoothed_per_million", "required": true}, {"type":
+  "double", "name": "total_deaths", "required": true}, {"type": "double", "name":
+  "new_deaths", "required": true}, {"type": "double", "name": "new_deaths_smoothed",
+  "required": true}, {"type": "double", "name": "total_deaths_per_million", "required":
+  true}, {"type": "double", "name": "new_deaths_per_million", "required": true}, {"type":
+  "double", "name": "new_deaths_smoothed_per_million", "required": true}, {"type":
+  "double", "name": "icu_patients", "required": true}, {"type": "double", "name":
+  "icu_patients_per_million", "required": true}, {"type": "double", "name": "stringency_index",
+  "required": true}, {"type": "double", "name": "reproduction_rate", "required": true},
+  {"type": "long", "name": "population", "required": true}, {"type": "double", "name":
+  "population_density", "required": true}, {"type": "double", "name": "median_age",
+  "required": true}, {"type": "double", "name": "life_expectancy", "required": true},
+  {"type": "double", "name": "gdp_per_capita", "required": true}, {"type": "double",
+  "name": "extreme_poverty", "required": true}, {"type": "double", "name": "diabetes_prevalence",
+  "required": true}, {"type": "double", "name": "hospital_beds_per_thousand", "required":
+  true}, {"type": "long", "name": "year", "required": true}, {"type": "long", "name":
+  "month", "required": true}, {"type": "long", "name": "day", "required": true}, {"type":
+  "boolean", "name": "country_South Korea", "required": true}, {"type": "boolean",
+  "name": "code_KOR", "required": true}, {"type": "boolean", "name": "continent_Asia",
+  "required": true}]}'
+source: '{"uri": "C:\\AIBootCamp\\project\\mlops\\workspace\\mlops-cloud-project-mlops-1\\data\\processed\\covid_processed.csv"}'
+source_type: local
