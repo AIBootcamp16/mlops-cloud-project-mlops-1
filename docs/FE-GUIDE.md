@@ -1,7 +1,11 @@
 # Robust Integrated Covid Trainer — Feature Engineering Guide
 
-미래 시점에도 계산 가능한 future‑aware 피처만으로 안정적 시계열 예측을 수행하는 프로젝트의 FE-GUIDE 입니다.
 **어떤 피처를 어떻게 만들고**, **왜 그렇게 설계했는지**
+
+미래 시점에도 계산 가능한 future‑aware 피처만으로 안정적 시계열 예측을 수행하는 프로젝트의 FE-GUIDE 입니다.
+
+
+
 
 <p align="center">
 
