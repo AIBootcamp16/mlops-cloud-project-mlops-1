@@ -1,0 +1,34 @@
+# infrastructure/docker/Dockerfile.analysis
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /workspace
+
+# 시스템 패키지 (Prophet, LightGBM, XGBoost, MLflow 빌드 시 필요)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential g++ make cmake git curl wget ca-certificates pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# 기본 requirements 설치 (core)
+COPY infrastructure/docker/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# (선택) 개발/주피터 환경
+COPY infrastructure/docker/requirements-dev.txt ./requirements-dev.txt
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+# (선택) 지오스택 (GeoPandas 등, 필요시 활성화)
+# COPY infrastructure/docker/requirements-geo.txt ./requirements-geo.txt
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#     gdal-bin libgdal-dev libgeos-dev libproj-dev \
+#     && pip install --no-cache-dir -r requirements-geo.txt \
+#     && rm -rf /var/lib/apt/lists/*
+
+# 프로젝트 코드 복사
+COPY data-pipeline/src ./src
+
+# PYTHONPATH 등록
+ENV PYTHONPATH=/workspace/src
+
+EXPOSE 8888
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--allow-root", "--NotebookApp.token="]
