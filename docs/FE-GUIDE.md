@@ -1,6 +1,6 @@
 # Robust Integrated Covid Trainer — Feature Engineering Guide
 
-미래 시점에도 계산 가능한 future‑aware 피처만으로 안정적 시계열 예측을 수행하는 프로젝트의 README입니다. 깃허브 리포지토리 최상단 [README.md](http://README.md)로 바로 사용할 수 있는 형식입니다.
+미래 시점에도 계산 가능한 future‑aware 피처만으로 안정적 시계열 예측을 수행하는 프로젝트의 FE-GUIDE 입니다.
 
 <p align="center">
 
