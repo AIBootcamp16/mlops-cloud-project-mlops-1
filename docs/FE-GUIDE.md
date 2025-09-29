@@ -18,13 +18,13 @@
 
 ## 전체 변환 흐름 (High-level Pipeline)
 
-원시 데이터 → 기본 정리
+**1.원시 데이터 → 기본 정리**
 
 read_table_robust: CSV/TSV/Excel 자동 파싱(구분자/인코딩)
 
 add_time_features: date 정규화/파싱/주기 피처
 
-피처 엔지니어링
+**2.피처 엔지니어링**
 
 시간 기반 기본 피처(주기·계절성)
 
@@ -32,7 +32,7 @@ add_time_features: date 정규화/파싱/주기 피처
 
 미래 안전(future-aware) 화이트리스트 선택
 
-학습/검증/예측
+**3.학습/검증/예측**
 
 y_next = target.shift(-1)
 
@@ -42,8 +42,6 @@ y_next = target.shift(-1)
 
 H-step 재귀 예측(recursive_forecast_dynamic)
 
-markdown
-코드 복사
 
 ---
 
@@ -103,6 +101,7 @@ markdown
 
 > 실제 열 이름은 `target` 파라미터에 따라 `new_cases_*` 또는 사용자 지정 접두로 생성됩니다.
 
+
 ### A. 기본/키 컬럼
 
 | 컬럼      | 타입       | 설명                                                        |
@@ -122,13 +121,13 @@ markdown
 
 ### C. 타깃 유도 피처 (미래 계산 가능)
 
-| 컬럼                           | 타입  | 설명                              |
-|--------------------------------|-------|-----------------------------------|
-| `{t}_lag1`, `{t}_lag7`, `{t}_lag14` | float | t일 전 값                         |
-| `{t}_rollmean7/14/28`          | float | 전일까지 이동평균(창 7/14/28)     |
-| `{t}_rollstd7/14/28`           | float | 전일까지 이동표준편차(창 7/14/28) |
-| `{t}_diff1`                    | float | 전일 대비 차분                    |
-| `{t}_pct`                      | float | 전일 대비 증감률                  |
+| 컬럼                             | 타입  | 설명                              |
+|----------------------------------|-------|-----------------------------------|
+| `{t}_lag1`,`{t}_lag7`,`{t}_lag14`| float | t일 전 값                         |
+| `{t}_rollmean7/14/28`            | float | 전일까지 이동평균(창 7/14/28)      |
+| `{t}_rollstd7/14/28`             | float | 전일까지 이동표준편차(창 7/14/28)  |
+| `{t}_diff1`                      | float | 전일 대비 차분                    |
+| `{t}_pct`                        | float | 전일 대비 증감률                  |
 
 > `{t}`는 타깃 접두(예: `new_cases_`)를 의미합니다.
 
@@ -152,8 +151,11 @@ markdown
   `new_cases_lag1 = [NaN,100,120,90,90] → 보간/ffill 후 [100,100,120,90,90]`  
   `new_cases_rollmean7`: `shift(1)` 뒤 창 평균, `rollstd` 동일  
   `new_cases_diff1`, `new_cases_pct`: 전일 변화/증감률 계산
-- **학습 타깃:** `y_next = new_cases.shift(-1)`  
-- **미래 안전 피처만 선택:** `dow_*`, `month_*`, `weekofyear`, `dayofyear`, `new_cases_*`  
+
+**학습 타깃:** `y_next = new_cases.shift(-1)`  
+
+**미래 안전 피처만 선택:** 
+`dow_*`, `month_*`, `weekofyear`, `dayofyear`, `new_cases_*`  
   *(→ `y_next`, 당일 `new_cases`는 제외)*
 
 ---
@@ -161,25 +163,18 @@ markdown
 ## 수식 & 핵심 함수
 
 **주기 임베딩(누수 없이 계절성 인코딩)**
-dow_sin = sin(2π * dow / 7), dow_cos = cos(2π * dow / 7)
-month_sin = sin(2π * month / 12), month_cos = cos(2π * month / 12)
-
-bash
-코드 복사
+dow_sin = sin(2π * dow / 7), 
+dow_cos = cos(2π * dow / 7)
+month_sin = sin(2π * month / 12), 
+month_cos = cos(2π * month / 12)
 
 **이동 통계(shift(1)로 미래 누수 차단)**
 rollmean_w(t) = mean(target[t-1], target[t-2], …, target[t-w])
 rollstd_w(t) = std(same_window)
 
-markdown
-코드 복사
-
 **변화율/차분**
 diff1(t) = target[t] - target[t-1]
 pct(t) = (target[t] - target[t-1]) / max(|target[t-1]|, 1e-9)
-
-yaml
-코드 복사
 
 **재귀 예측(`recursive_forecast_dynamic`)**
 - 미래일 `t+1`을 예측 → 그 값을 다시 `lag/roll/diff/pct` 계산에 반영 → `t+2` 예측 … 반복  
