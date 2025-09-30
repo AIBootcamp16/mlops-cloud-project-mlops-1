@@ -7,10 +7,12 @@ import pandas as pd
 from typing import Optional, Dict, Any
 from datetime import datetime
 import os
+import json
 
 from collectors.covid_collector import CovidDataCollector
 from data_processing.data_preprocessor import CovidDataPreprocessor
 from config.settings import ProjectConfig
+from utils.mlflow_utils import edit_json
 
 file_path = os.path.abspath(__file__)
 
@@ -37,8 +39,6 @@ class MLflowCovidPipeline:
 
     def _ensure_local_tracking_if_no_s3_creds(self):
         uri = (self.config.mlflow.TRACKING_URI or "").strip()
-        print("set mlruns directory... : \n", file_path)
-        print("uri :", uri)
         if uri.startswith("http://") or uri.startswith("https://"):
             return
 
@@ -70,6 +70,9 @@ class MLflowCovidPipeline:
         print("\n[STEP 1] Data Collection")
         raw_data = self.collector.collect_raw_data(run_name=collection_run_name)
         collection_run_id = mlflow.active_run().info.run_id if mlflow.active_run() else None
+        json_data = {"collection_rud_id" : collection_run_id}
+        edit_json(self.config.mlflow.PREPATH, json_data)
+
 
         # 2단계: 데이터 전처리
         print("\n[STEP 2] Data Preprocessing")
@@ -77,6 +80,9 @@ class MLflowCovidPipeline:
             raw_data, 
             run_name=preprocessing_run_name
         )
+        processed_run_id = mlflow.active_run().info.run_id if mlflow.active_run() else None
+        json_data = {"processed_run_id" : processed_run_id}
+        edit_json(self.config.mlflow.PREPATH, json_data)
 
         print("\n" + "=" * 60)
         print("Pipeline completed successfully!")

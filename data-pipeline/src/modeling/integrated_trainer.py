@@ -18,6 +18,8 @@ import mlflow
 import mlflow.sklearn
 from mlflow.models import infer_signature
 
+from config.settings import ProjectConfig
+from utils.mlflow_utils import edit_json
 # ========================= MLflow Safe Init =========================
 def setup_mlflow_or_fallback(experiment_name: str, preferred_uri: Optional[str] = None) -> bool:
     """
@@ -204,11 +206,21 @@ class IntegratedCovidTrainer:
         self.cfg = cfg or TrainConfig()
         self.registry_enabled = setup_mlflow_or_fallback(self.cfg.experiment_name, tracking_uri)
 
+        rf_n_estimators = np.random.randint(200, 500)
+        rf_max_depth = np.random.randint(5,15)
+        rf_min_samples_leaf = np.random.randint(2,5)
+
+        gb_n_estimators = np.random.randint(200, 400)
+        gb_learning_rate = np.random.random() * 0.02 + 0.02
+        gb_max_depth = np.random.randint(3,5)
+
+        ridge_random_state = np.random.randint(1,100)
+
         self.models: Dict[str,Any] = {
-            "random_forest": RandomForestRegressor(random_state=self.cfg.random_state, n_estimators=400, max_depth=12, min_samples_leaf=2, n_jobs=-1),
-            "gradient_boosting": GradientBoostingRegressor(random_state=self.cfg.random_state, n_estimators=300, learning_rate=0.05, max_depth=3),
+            "random_forest": RandomForestRegressor(random_state=self.cfg.random_state, n_estimators=rf_n_estimators, max_depth=rf_max_depth, min_samples_leaf=rf_min_samples_leaf, n_jobs=-1),
+            "gradient_boosting": GradientBoostingRegressor(random_state=self.cfg.random_state, n_estimators=gb_n_estimators, learning_rate=gb_learning_rate, max_depth=gb_max_depth),
             "linear_regression": LinearRegression(),
-            "ridge_regression": Ridge(random_state=self.cfg.random_state),
+            "ridge_regression": Ridge(random_state=ridge_random_state),
         }
         try:
             from xgboost import XGBRegressor
@@ -375,8 +387,24 @@ class IntegratedCovidTrainer:
                 json.dump(summ, f, indent=2); mlflow.log_artifact(f.name, "reports/training_summary.json"); tmp=f.name
             os.remove(tmp)
 
-            model_register = mlflow.register_model(model_uri=f"runs:/{run_id}/best_model",
-                                                name = "CovidPredictionModel")
-            print("[trainer]Model Registered:",model_register.name)
+            config = ProjectConfig()
+            json_path = config.mlflow.PREPATH
 
-            return {"best_model": best, "metrics": results[best]["metrics"], "model_run_id":run_id, "model_run_name":run_name}
+            if os.path.exists(json_path) :
+                with open(json_path, "r", encoding="utf-8") as f:
+                    predata = json.load(f)
+                premodel_rmse = predata.get("model_rmse", np.inf)
+
+            if premodel_rmse > results[best]["metrics"]["test"]["rmse"] :
+                model_register = mlflow.register_model(model_uri=f"runs:/{run_id}/best_model",
+                                                    name = "CovidPredictionModel")
+                print("[trainer]Model Registered:",model_register.name)
+
+                json_data = {"model_run_id" : run_id, "model_rmse" : results[best]["metrics"]["test"]["rmse"]}
+                edit_json(config.mlflow.PREPATH, json_data)
+
+                return {"best_model": best, "metrics": results[best]["metrics"], "model_run_id":run_id, "model_run_name":run_name}
+            
+            else :
+                print(f"[train]premodel is better\npremodel_rmse:{premodel_rmse}, current_model_rmse:{results[best]['metrics']['test']['rmse']}")
+                return None

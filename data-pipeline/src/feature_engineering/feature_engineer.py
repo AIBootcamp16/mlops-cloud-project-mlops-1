@@ -15,7 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from config.settings import ProjectConfig
-from utils.mlflow_utils import MLflowManager
+from utils.mlflow_utils import MLflowManager, edit_json
 
 
 def _sanitize_mlflow_name(name: str) -> str:
@@ -59,10 +59,10 @@ class CovidFeatureEngineer:
 
             print(f"Feature engineering completed! Check MLflow UI: {self.config.mlflow.TRACKING_URI}")
 
-            # run name과 id log
-            # run = mlflow.active_run()
-            # featuring_run_id = run.info.run_id  
-            # mlflow.log_param("featuring_run_id", featuring_run_id)
+            feature_run_id = mlflow.active_run().info.run_id if mlflow.active_run() else None
+            json_data = {"feature_run_id" : feature_run_id}
+            edit_json(self.config.mlflow.PREPATH, json_data)
+            
             return features_df, target_series
 
     def _log_feature_params(self, data: pd.DataFrame, target_column: str) -> None:

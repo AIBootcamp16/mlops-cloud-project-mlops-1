@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import mlflow, os, sys
+import mlflow, os, sys, json
 from mlflow.tracking import MlflowClient
 from typing import Optional
 
@@ -21,17 +21,26 @@ from modeling.integrated_trainer import IntegratedCovidTrainer, TrainConfig, add
 
 # ---------------------------data load---------------------------
 DATE_FEATS = ["dow_sin","dow_cos","weekofyear","dayofyear","month_sin","month_cos"]
+
 config = ProjectConfig()
 mlflow.set_tracking_uri(config.mlflow.TRACKING_URI)
+json_path = config.mlflow.PREPATH
 
-featuring_run_id = "982b4009026141f9b4125832c356bb8a"
+
+if os.path.exists(json_path) :
+    with open(json_path, "r", encoding="utf-8") as f:
+        predata = json.load(f)
+if predata["feature_run_id"] :
+    feature_run_id = predata["feature_run_id"]
+    model_run_id = predata["model_run_id"]
+
 
 feature_path = mlflow.artifacts.download_artifacts(
-    run_id=featuring_run_id,
+    run_id=feature_run_id,
     artifact_path="features"  # 예: "model", "data.csv", "plots/"
 )
 target_path = mlflow.artifacts.download_artifacts(
-    run_id=featuring_run_id,
+    run_id=feature_run_id,
     artifact_path="targets"  # 예: "model", "data.csv", "plots/"
 )
 feature_files = os.listdir(feature_path)
@@ -51,7 +60,6 @@ df_feat = add_time_features(df_feat, "date")
 df_feat = add_lag_roll(df_feat, "new_cases", lags=(1,7,14), rolls=(7,14,28))
 
 client = MlflowClient()
-model_run_id = "0adb1e1801f84dd6b53489c7022d4eaa" #15fb849ce7a7465eb73ca187a2a0209a
 log_model_name = "best_model" # model_linear, model_rf, model_xgb
 model_uri = f"runs:/{model_run_id}/{log_model_name}"   # replace "model" with your logged name
 

@@ -200,3 +200,17 @@ def load_latest_artifact_dataframe(artifact_path: str, tracking_uri: Optional[st
     except Exception as e:
         print(f"[load_latest_artifact_dataframe] failed: {e}")
         return None
+    
+def edit_json(json_path : str, json_data : Optional[dict] = None):
+    if os.path.exists(json_path):
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    else :
+        data = {}
+        print("[utils]Create new JSON file")
+    if json_data :
+        for keys in json_data.keys():
+            data[keys] = json_data[keys]
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)

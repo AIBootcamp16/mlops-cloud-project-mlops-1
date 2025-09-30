@@ -30,8 +30,6 @@ class CovidDataCollector:
             self.config.mlflow.EXPERIMENT_NAME
         )
 
-        print(f"[collector] tracking_uri = {mlflow.get_tracking_uri()}")
-
     def _ensure_local_tracking_if_no_s3_creds(self):
         """S3 크리덴셜 없으면 로컬 파일 스토어로 폴백"""
         uri = (self.config.mlflow.TRACKING_URI or "").strip()

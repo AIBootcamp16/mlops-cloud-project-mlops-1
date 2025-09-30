@@ -19,8 +19,15 @@ class MLflowConfig:
     """MLflow 관련 설정"""
     # MLRUNS_DIR = r"C:\AIBootCamp\project\mlops\workspace"
     TRACKING_URI: str = os.getenv("MLFLOW_TRACKING_URI", "file:///C:/AIBootCamp/project/mlops/workspace")
-    TRACKING_URI = TRACKING_URI + "/mlruns"
 
+    PREPATH = TRACKING_URI.replace("file:///", "")
+    PREPATH = PREPATH + "/predata"
+    PREPATH = os.path.normpath(PREPATH)
+    os.makedirs(PREPATH, exist_ok=True)
+    PREPATH = PREPATH + "/predata.json"
+    PREPATH = os.path.normpath(PREPATH)
+
+    TRACKING_URI = TRACKING_URI + "/mlruns"
     PATH = TRACKING_URI.replace("file:///", "")  # remove URI prefix
     PATH = os.path.normpath(PATH)
     # mlruns 자동 생성
