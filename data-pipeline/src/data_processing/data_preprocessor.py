@@ -9,8 +9,8 @@ import mlflow.data
 from mlflow.tracking import MlflowClient
 from contextlib import contextmanager
 
-from ..config.settings import ProjectConfig
-from ..utils.mlflow_utils import MLflowManager, create_data_metadata
+from config.settings import ProjectConfig
+from utils.mlflow_utils import MLflowManager, create_data_metadata
 
 
 class CovidDataPreprocessor:
@@ -21,6 +21,11 @@ class CovidDataPreprocessor:
         if tracking_uri:
             self.config.mlflow.TRACKING_URI = tracking_uri
 
+        # if self.config.mlflow.MLRUNS_DIR:
+        #     mlruns_dir = self.config.mlflow.MLRUNS_DIR
+        # else :
+        #     mlruns_dir = None
+        
         mlflow.set_tracking_uri(self.config.mlflow.TRACKING_URI)
 
         self.mlflow_manager = MLflowManager(
@@ -418,6 +423,7 @@ class CovidDataPreprocessor:
     def _log_processing_results(self, raw_data: pd.DataFrame, processed_data: pd.DataFrame) -> None:
         """전처리 결과를 MLflow에 로깅"""
 
+
         # 기본 메트릭
         mlflow.log_metric("input_rows", len(raw_data))
         mlflow.log_metric("output_rows", len(processed_data))
@@ -448,6 +454,7 @@ class CovidDataPreprocessor:
         self.mlflow_manager.save_and_log_artifact(
             data=processed_data,
             filename=csv_filename,
+            mlruns_dir = self.config.mlflow.PATH,
             artifact_path="processed_data"
         )
 

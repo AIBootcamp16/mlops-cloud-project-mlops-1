@@ -8,8 +8,8 @@ from botocore.exceptions import NoCredentialsError, PartialCredentialsError, Cli
 from typing import Optional, Tuple
 import mlflow
 
-from ..config.settings import ProjectConfig
-from ..utils.mlflow_utils import MLflowManager, create_data_metadata
+from config.settings import ProjectConfig
+from utils.mlflow_utils import MLflowManager, create_data_metadata
 
 
 class CovidDataCollector:
@@ -147,8 +147,8 @@ class CovidDataCollector:
                     print(f"Found Korea data in chunk {chunks_processed}: {len(korea_in_chunk)} rows")
 
                 # 최대 10개 청크만 처리 (메모리 절약)
-                if chunks_processed >= 10:
-                    break
+                # if chunks_processed >= 10:
+                #     break
 
             # 청크 병합
             if korea_chunks:

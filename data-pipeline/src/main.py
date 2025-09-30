@@ -3,20 +3,25 @@
 # -*- coding: utf-8 -*-
 import os, sys, argparse
 from datetime import datetime
+import mlflow
 
 # make src importable whether run from project root or elsewhere
+file_path = os.path.abspath(__file__)
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-SRC_PATH = os.path.join(PROJECT_ROOT, "src")
+SRC_PATH = PROJECT_ROOT
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
 
-from src.pipeline.mlflow_pipeline import MLflowCovidPipeline
-from src.feature_engineering.feature_engineer import CovidFeatureEngineer
-from src.modeling.integrated_trainer import IntegratedCovidTrainer, TrainConfig, add_time_features, add_lag_roll
+from pipeline.mlflow_pipeline import MLflowCovidPipeline
+from feature_engineering.feature_engineer import CovidFeatureEngineer
+from modeling.integrated_trainer import IntegratedCovidTrainer, TrainConfig, add_time_features, add_lag_roll
 
 def run_pipeline(args):
     # 1) Collect + Preprocess (or load from MLflow latest)
+    print("start pipeline : \n", file_path)
     pipeline = MLflowCovidPipeline()
+
     if args.skip_collect:
         print("[info] --skip-collect enabled -> using latest collection run in MLflow (or running full if none).")
         processed = pipeline.run_preprocessing_from_latest_collection()
@@ -26,6 +31,7 @@ def run_pipeline(args):
 
     # 2) Feature Engineering (rich FE)
     fe = CovidFeatureEngineer()
+    # print("[main]processed :", processed) checked
     features_df, target_series = fe.engineer_features(processed, target_column=args.target,
                                                       run_name="feature_engineering_v1")
 
@@ -44,6 +50,8 @@ def run_pipeline(args):
     print("\n=== DONE ===")
     print("Best model:", res["best_model"])
     print("Test metrics:", res["metrics"]["test"])
+    print("Model Run ID:", res["model_run_id"])
+    print("Model Run Name:", res["model_run_name"])
 
 def build_argparser():
     ap = argparse.ArgumentParser(description="End-to-end COVID pipeline runner (MLflow + Integrated Trainer)")

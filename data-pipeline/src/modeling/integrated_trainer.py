@@ -58,11 +58,10 @@ DATE_FEATS = ["dow_sin","dow_cos","weekofyear","dayofyear","month_sin","month_co
 
 def add_time_features(df: pd.DataFrame, date_col="date") -> pd.DataFrame:
     df = df.copy()
+
     if date_col not in df.columns:
-        for cand in ["Date","ds","DATE","날짜"]:
-            if cand in df.columns:
-                df.rename(columns={cand:"date"}, inplace=True)
-                break
+        df["date"] = df.apply(lambda x: f"{x['year']}-{x['month']}-{x['day']}", axis=1)
+
     if "date" not in df.columns:
         raise ValueError("Missing 'date' column after rename attempts.")
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
@@ -230,6 +229,12 @@ class IntegratedCovidTrainer:
                 raise ValueError("No future-aware features. FE must add lag/roll/diff/pct and date features.")
             mlflow.log_text("\n".join(feat_list), "features_used.txt")
 
+            dataset = mlflow.data.from_pandas(df_feat, "train_dataset")
+            mlflow.log_input(dataset, context="train_dataset")
+
+            run = mlflow.active_run()
+            run_id = mlflow.active_run().info.run_id
+            run_name = run.data.tags.get("mlflow.runName") 
             df = df_feat.sort_values("date").copy()
             df["y_next"] = df[target].shift(-1)
             df = df.dropna(subset=["y_next"]).reset_index(drop=True)
@@ -370,4 +375,8 @@ class IntegratedCovidTrainer:
                 json.dump(summ, f, indent=2); mlflow.log_artifact(f.name, "reports/training_summary.json"); tmp=f.name
             os.remove(tmp)
 
-            return {"best_model": best, "metrics": results[best]["metrics"]}
+            model_register = mlflow.register_model(model_uri=f"runs:/{run_id}/best_model",
+                                                name = "CovidPredictionModel")
+            print("[trainer]Model Registered:",model_register.name)
+
+            return {"best_model": best, "metrics": results[best]["metrics"], "model_run_id":run_id, "model_run_name":run_name}

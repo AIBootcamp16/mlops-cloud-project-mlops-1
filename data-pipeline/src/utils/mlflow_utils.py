@@ -76,12 +76,15 @@ class MLflowManager:
         )
         mlflow.log_input(dataset, context=context)
 
-    def save_and_log_artifact(self, data: pd.DataFrame, filename: str, artifact_path: str) -> str:
+    def save_and_log_artifact(self, data: pd.DataFrame, filename: str, mlruns_dir: Optional[str], artifact_path: str) -> str:
         """데이터를 CSV로 저장하고 MLflow 아티팩트로 등록"""
         # 임시 디렉터리에 저장
-        tmp_dir = tempfile.gettempdir()
-        full_path = os.path.join(tmp_dir, filename)
-
+        if mlruns_dir :
+            full_path = os.path.join(mlruns_dir, filename)
+        else :
+            tmp_dir = tempfile.gettempdir()
+            full_path = os.path.join(tmp_dir, filename)
+        print("your tmp path :",full_path)
         # CSV 파일 저장
         data.to_csv(full_path, index=False)
 

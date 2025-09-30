@@ -14,8 +14,8 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-from ..config.settings import ProjectConfig
-from ..utils.mlflow_utils import MLflowManager
+from config.settings import ProjectConfig
+from utils.mlflow_utils import MLflowManager
 
 
 def _sanitize_mlflow_name(name: str) -> str:
@@ -58,6 +58,11 @@ class CovidFeatureEngineer:
             self._log_feature_results(processed_data, features_df, target_series)
 
             print(f"Feature engineering completed! Check MLflow UI: {self.config.mlflow.TRACKING_URI}")
+
+            # run name과 id log
+            # run = mlflow.active_run()
+            # featuring_run_id = run.info.run_id  
+            # mlflow.log_param("featuring_run_id", featuring_run_id)
             return features_df, target_series
 
     def _log_feature_params(self, data: pd.DataFrame, target_column: str) -> None:
@@ -105,11 +110,14 @@ class CovidFeatureEngineer:
 
         # 5단계: 최종 데이터 정제
         print("Step 5: Final data cleaning...")
-        features_df = self._final_cleaning(features_df)
+        # features_df = self._final_cleaning(features_df)
+
+        # print("features_df_5:",features_df)
+
 
         # 6단계: 스케일링
         print("Step 6: Scaling features...")
-        features_df = self._scale_features_safe(features_df)
+        # features_df = self._scale_features_safe(features_df)
 
         # 타겟 변수 분리
         if target_column not in features_df.columns:
@@ -117,6 +125,7 @@ class CovidFeatureEngineer:
 
         target_series = features_df[target_column].copy()
         features_df = features_df.drop(columns=[target_column])
+
 
         # 결측치 제거 (래그 피처로 인한)
         print("Step 7: Removing rows with missing values...")
@@ -402,7 +411,6 @@ class CovidFeatureEngineer:
     def _log_feature_results(self, input_data: pd.DataFrame, features_df: pd.DataFrame,
                              target_series: pd.Series) -> None:
         """피처 엔지니어링 결과 로깅"""
-
         # 기본 메트릭
         mlflow.log_metric("input_samples", len(input_data))
         mlflow.log_metric("output_samples", len(features_df))

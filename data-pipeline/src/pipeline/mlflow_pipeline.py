@@ -8,14 +8,16 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 import os
 
-from ..collectors.covid_collector import CovidDataCollector
-from ..data_processing.data_preprocessor import CovidDataPreprocessor
-from ..config.settings import ProjectConfig
+from collectors.covid_collector import CovidDataCollector
+from data_processing.data_preprocessor import CovidDataPreprocessor
+from config.settings import ProjectConfig
+
+file_path = os.path.abspath(__file__)
 
 
 class MLflowCovidPipeline:
     """MLflow 기반 COVID 데이터 전체 파이프라인"""
-    
+
     def __init__(self, config: Optional[ProjectConfig] = None, tracking_uri: Optional[str] = None):
         self.config = config or ProjectConfig(tracking_uri=tracking_uri)
 
@@ -27,6 +29,7 @@ class MLflowCovidPipeline:
 
         # ★ 변경: mlflow 글로벌 세팅 먼저
         mlflow.set_tracking_uri(self.config.mlflow.TRACKING_URI)
+        print("[pipeline]set tracking uri :", self.config.mlflow.TRACKING_URI)
 
         # ★ 변경: 하위 컴포넌트는 반드시 self.config로 "한 번만" 생성
         self.collector = CovidDataCollector(config=self.config)
@@ -34,7 +37,8 @@ class MLflowCovidPipeline:
 
     def _ensure_local_tracking_if_no_s3_creds(self):
         uri = (self.config.mlflow.TRACKING_URI or "").strip()
-
+        print("set mlruns directory... : \n", file_path)
+        print("uri :", uri)
         if uri.startswith("http://") or uri.startswith("https://"):
             return
 
@@ -77,7 +81,7 @@ class MLflowCovidPipeline:
         print("\n" + "=" * 60)
         print("Pipeline completed successfully!")
         print(f"MLflow UI: {self.config.mlflow.TRACKING_URI}")
-        
+        # print("[pipeline]processed_data:", processed_data) check complete
         return processed_data
 
     def run_preprocessing_from_artifact(self, collection_run_id: str, 
