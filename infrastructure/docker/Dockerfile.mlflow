@@ -1,0 +1,62 @@
+FROM python:3.11-slim
+
+# 환경 변수 설정
+ENV PYTHONUNBUFFERED=1
+
+# 시스템 패키지 설치 (최소한만)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 작업 디렉토리 생성
+WORKDIR /app
+
+# MLflow 및 필수 패키지 설치 (RDS/S3 지원 포함)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    mlflow>=2.8.0 \
+    pandas>=2.0.0 \
+    numpy>=1.24.0 \
+    psycopg2-binary \
+    boto3
+
+# 포트 노출
+EXPOSE 5000
+
+# 헬스체크
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:5000/health || exit 1
+
+# 엔트리포인트 스크립트 생성
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# 환경변수 확인\n\
+if [ -z "$MLFLOW_BACKEND_STORE_URI" ]; then\n\
+    echo "Warning: MLFLOW_BACKEND_STORE_URI not set, using default file backend"\n\
+    export MLFLOW_BACKEND_STORE_URI="file:///app/mlruns"\n\
+fi\n\
+\n\
+if [ -z "$MLFLOW_DEFAULT_ARTIFACT_ROOT" ]; then\n\
+    echo "Warning: MLFLOW_DEFAULT_ARTIFACT_ROOT not set, using default file backend"\n\
+    export MLFLOW_DEFAULT_ARTIFACT_ROOT="file:///app/artifacts"\n\
+fi\n\
+\n\
+echo "Starting MLflow server with:"\n\
+echo "Backend Store: $MLFLOW_BACKEND_STORE_URI"\n\
+echo "Artifact Root: $MLFLOW_DEFAULT_ARTIFACT_ROOT"\n\
+\n\
+# MLflow 서버 실행\n\
+exec mlflow server \\\n\
+    --backend-store-uri "$MLFLOW_BACKEND_STORE_URI" \\\n\
+    --default-artifact-root "$MLFLOW_DEFAULT_ARTIFACT_ROOT" \\\n\
+    --host 0.0.0.0 \\\n\
+    --port 5000\n' > /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
+# 기본 디렉토리 생성 (파일 백엔드 fallback용)
+RUN mkdir -p /app/mlruns && \
+    mkdir -p /app/artifacts
+
+# 엔트리포인트 실행
+ENTRYPOINT ["/app/entrypoint.sh"]
