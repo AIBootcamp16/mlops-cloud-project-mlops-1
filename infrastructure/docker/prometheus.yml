@@ -1,0 +1,28 @@
+# infrastructure/docker/prometheus.yml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # MLflow 메트릭 수집
+  - job_name: 'mlflow'
+    static_configs:
+      - targets: ['localhost:5000']
+    metrics_path: '/metrics'
+
+  # Airflow 메트릭 수집
+  - job_name: 'airflow'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/admin/metrics'
+
+  # 커스텀 애플리케이션 메트릭
+  - job_name: 'covid-prediction-api'
+    static_configs:
+      - targets: ['localhost:8000']
+    metrics_path: '/metrics'
+
+  # Prometheus 자체 모니터링
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

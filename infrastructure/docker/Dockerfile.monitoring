@@ -1,0 +1,26 @@
+# infrastructure/docker/Dockerfile.monitoring
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# 시스템 패키지 설치
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 패키지 설치
+COPY infrastructure/docker/requirements-monitoring.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-monitoring.txt
+
+# 모니터링 코드 복사
+COPY monitoring/ /app/monitoring/
+COPY data/ /workspace/data/
+
+# 포트 노출
+EXPOSE 8501
+
+# Streamlit 실행
+CMD ["streamlit", "run", "/app/monitoring/dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]

@@ -103,13 +103,13 @@ class CovidFeatureEngineer:
         features_df = self._clean_step(features_df, "after statistical features")
         mlflow.log_metric("step4_features", len(features_df.columns))
 
-        # 5단계: 최종 데이터 정제
-        print("Step 5: Final data cleaning...")
-        features_df = self._final_cleaning(features_df)
-
-        # 6단계: 스케일링
-        print("Step 6: Scaling features...")
-        features_df = self._scale_features_safe(features_df)
+        # # 5단계: 최종 데이터 정제
+        # print("Step 5: Final data cleaning...")
+        # # features_df = self._final_cleaning(features_df)
+        #
+        # # 6단계: 스케일링
+        # print("Step 6: Scaling features...")
+        # features_df = self._scale_features_safe(features_df)
 
         # 타겟 변수 분리
         if target_column not in features_df.columns:

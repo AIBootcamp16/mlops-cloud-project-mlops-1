@@ -21,6 +21,10 @@ services:
       --serve-artifacts
     networks:
       - mlops
+    volumes:
+      - mlflow-data:/app/mlruns
+      - mlflow-artifacts:/app/artifacts
+
 
   covid-analysis:
     build:
@@ -33,6 +37,11 @@ services:
       - "8888:8888"
     networks:
       - mlops
+    depends_on:
+      - mlflow
+    volumes:
+      - ../../data:/workspace/data
+      - ../../models:/workspace/models
 
   airflow:
     build:
@@ -61,49 +70,89 @@ services:
       - mlflow
     networks:
       - mlops
+    volumes:
+      - ../../data-pipeline:/workspace
+      - data_shared:/workspace/data
+      - airflow-logs:/opt/airflow/logs
+
+    # ========================================
+    # 모니터링 대시보드 (Streamlit)
+    # ========================================
+  monitoring-dashboard:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.monitoring
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - FASTAPI_URL=http://fastapi:8000
+      - PYTHONPATH=/app
+      - S3_BUCKET=${S3_BUCKET}
+      # (선택) 피처/예측을 S3에서 직접 읽고 싶다면:
+      - FEATURES_S3_PREFIX=s3://${S3_BUCKET}/features/
+      # - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - AWS_EC2_METADATA_DISABLED=true
+    ports:
+      - "8501:8501"
+    depends_on:
+      - mlflow
+      - fastapi
+    networks:
+      - mlops
+    volumes:
+      - data_shared:/workspace/data
+      - ../../monitoring:/app/monitoring
+    command: streamlit run /app/monitoring/dashboard.py --server.port=8501 --server.address=0.0.0.0
+
+  fastapi:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.fastapi
+    env_file: .env
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+      # API가 S3에서 피처를 읽도록 프리픽스 지정
+      - FEATURES_S3_PREFIX=s3://${S3_BUCKET}/features/
+      # (선택) 로컬 폴백 경로
+      - FEATURES_LOCAL_PATH=/workspace/data/features/latest_features.csv
+      # S3 접근에 필요한 크레덴셜
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      # 메타데이터 조회 비활성(컨테이너 환경에서 추천)
+      - AWS_EC2_METADATA_DISABLED=true
+      # OWID 다운로드 설정
+      - USE_OWID_DIRECT=true
+      - AUTO_PREDICT_WINDOW=1
+      - DATA_CUTOFF_DATE=2023-03-31
+      - MAX_FORECAST_DAYS=30
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mlflow
+    networks:
+      - mlops
+    volumes:
+      - ../../api-service/src:/app/api   # <-- src만 마운트
+      - data_shared:/workspace/data
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+
 
 networks:
   mlops:
     driver: bridge
 
+volumes:
+  mlflow-data:
+  mlflow-artifacts:
+  airflow-logs:
+  data_shared: {}
 
-#version: '3.8'
-#
-#services:
-#  covid-analysis:
-#    image: hyuk12/covid-analysis:v2.2
-#    ports:
-#      - "8888:8888"
-#    environment:
-#      - JUPYTER_ENABLE_LAB=${JUPYTER_ENABLE_LAB}
-#      - PYTHONPATH=${PYTHONPATH}
-#      - MLFLOW_TRACKING_URI=http://mlflow-server:5000
-#      # AWS 환경변수 (데이터 수집이나 직접 S3 접근 시에만 필요)
-#      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-#      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-#      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-#      - S3_BUCKET=${S3_BUCKET}
-#    working_dir: /workspace
-#    restart: unless-stopped
-#    depends_on:
-#      - mlflow-server
-#    env_file:
-#      - .env
-#
-#  mlflow-server:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile.mlflow
-#    ports:
-#      - "5000:5000"
-#    environment:
-#      # MLflow 서버 설정
-#      - MLFLOW_BACKEND_STORE_URI=${MLFLOW_BACKEND_STORE_URI}
-#      - MLFLOW_DEFAULT_ARTIFACT_ROOT=${MLFLOW_DEFAULT_ARTIFACT_ROOT}
-#      # AWS 자격증명
-#      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-#      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-#      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-#    restart: unless-stopped
-#    env_file:
-#      - .env
