@@ -1,4 +1,3 @@
-
 # src/pipeline/tasks/train.py
 # -*- coding: utf-8 -*-
 """
@@ -68,10 +67,8 @@ def main():
         features_df = features_df.copy()
         features_df[args.target] = target_series.values
 
-    # Minimal FE boost for recursive forecasting safety
-    from src.modeling.integrated_trainer import IntegratedCovidTrainer, TrainConfig, add_time_features, add_lag_roll
-    features_df = add_time_features(features_df, "date")
-    features_df = add_lag_roll(features_df, args.target, lags=(1,7,14), rolls=(7,14,28))
+    # Train with existing features (no additional FE)
+    from src.modeling.integrated_trainer import IntegratedCovidTrainer, TrainConfig
 
     cfg = TrainConfig(target_col=args.target, test_days=args.test_days, horizon=args.horizon)
     trainer = IntegratedCovidTrainer(cfg, tracking_uri=args.tracking_uri)

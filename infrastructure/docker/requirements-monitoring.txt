@@ -1,0 +1,19 @@
+# 모니터링 대시보드 필수 패키지
+streamlit>=1.28.0
+plotly>=5.17.0
+pandas>=2.0.0
+mlflow>=2.8.0
+
+# Data Drift 모니터링
+evidently>=0.4.0
+
+# 추가 시각화
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# MLflow 클라이언트
+boto3>=1.28.0  # S3 artifacts용
+
+# 유틸리티
+python-dateutil>=2.8.0
+pytz>=2023.3

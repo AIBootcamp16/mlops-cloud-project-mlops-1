@@ -70,64 +70,110 @@ class CovidFeatureEngineer:
         mlflow.log_param("scaling_method", "robust")  # StandardScaler 대신 RobustScaler 사용
 
     def _execute_feature_pipeline(self, data: pd.DataFrame, target_column: str) -> Tuple[pd.DataFrame, pd.Series]:
-        """피처 엔지니어링 파이프라인 실행"""
+        """✅ 수정: 최신 데이터 보존하는 피처 엔지니어링"""
 
-        # 데이터 정렬 (날짜순)
         data = data.sort_values('date').reset_index(drop=True)
 
-        # 초기 데이터 정제
         print("Step 0: Initial data cleaning...")
         data = self._initial_cleaning(data)
 
-        # 1단계: 시계열 피처 생성
+        # 1단계: 시계열 피처
         print("Step 1: Creating time series features...")
         features_df = self._create_time_series_features(data.copy())
         features_df = self._clean_step(features_df, "after time series features")
         mlflow.log_metric("step1_features", len(features_df.columns))
 
-        # 2단계: 래그 피처 생성
+        # 2단계: 래그 피처 (✅ 최소 래그만 사용)
         print("Step 2: Creating lag features...")
-        features_df = self._create_lag_features(features_df, target_column)
+        features_df = self._create_lag_features_minimal(features_df, target_column)
         features_df = self._clean_step(features_df, "after lag features")
         mlflow.log_metric("step2_features", len(features_df.columns))
 
-        # 3단계: 이동평균 피처 생성
+        # 3단계: 이동평균
         print("Step 3: Creating rolling window features...")
         features_df = self._create_rolling_features(features_df, target_column)
         features_df = self._clean_step(features_df, "after rolling features")
         mlflow.log_metric("step3_features", len(features_df.columns))
 
-        # 4단계: 통계적 피처 생성
+        # 4단계: 통계적 피처
         print("Step 4: Creating statistical features...")
         features_df = self._create_statistical_features(features_df, target_column)
         features_df = self._clean_step(features_df, "after statistical features")
         mlflow.log_metric("step4_features", len(features_df.columns))
 
-        # 5단계: 최종 데이터 정제
-        print("Step 5: Final data cleaning...")
-        features_df = self._final_cleaning(features_df)
-
-        # 6단계: 스케일링
-        print("Step 6: Scaling features...")
-        features_df = self._scale_features_safe(features_df)
-
-        # 타겟 변수 분리
+        # 타겟 분리
         if target_column not in features_df.columns:
-            raise ValueError(f"Target column '{target_column}' not found in features")
+            raise ValueError(f"Target column '{target_column}' not found")
 
         target_series = features_df[target_column].copy()
         features_df = features_df.drop(columns=[target_column])
 
-        # 결측치 제거 (래그 피처로 인한)
-        print("Step 7: Removing rows with missing values...")
-        valid_mask = features_df.notna().all(axis=1) & target_series.notna() & np.isfinite(target_series)
-        features_df = features_df[valid_mask].reset_index(drop=True)
-        target_series = target_series[valid_mask].reset_index(drop=True)
+        # ✅ 결측치 처리: 최신 데이터 최대한 보존
+        print("Step 5: Handling missing values (preserving recent data)...")
+
+        # 각 컬럼별 결측치 비율 확인
+        missing_pct = features_df.isnull().mean()
+        high_missing_cols = missing_pct[missing_pct > 0.5].index.tolist()
+
+        if high_missing_cols:
+            print(f"  - Dropping columns with >50% missing: {len(high_missing_cols)}")
+            features_df = features_df.drop(columns=high_missing_cols)
+
+        # ✅ Forward fill로 최신 데이터 보존
+        features_df = features_df.fillna(method='ffill', limit=14)  # 최대 14일까지만
+        features_df = features_df.fillna(method='bfill', limit=7)  # backward는 7일까지
+        features_df = features_df.fillna(0)  # 나머지는 0
+
+        # 타겟도 동일하게 처리
+        target_series = target_series.fillna(method='ffill', limit=14)
+        target_series = target_series.fillna(method='bfill', limit=7)
+        target_series = target_series.fillna(0)
+
+        # ✅ 최신 N일은 무조건 보존 (예: 최근 90일)
+        preserve_days = 90
+        if len(features_df) > preserve_days:
+            # 오래된 데이터 중 결측치 많은 행만 제거
+            old_data = features_df.iloc[:-preserve_days]
+            recent_data = features_df.iloc[-preserve_days:]
+
+            old_target = target_series.iloc[:-preserve_days]
+            recent_target = target_series.iloc[-preserve_days:]
+
+            # 오래된 데이터에서만 완전 결측치 행 제거
+            old_valid_mask = old_data.notna().all(axis=1) & old_target.notna()
+            old_data = old_data[old_valid_mask].reset_index(drop=True)
+            old_target = old_target[old_valid_mask].reset_index(drop=True)
+
+            # 최신 데이터는 그대로 유지
+            features_df = pd.concat([old_data, recent_data], ignore_index=True)
+            target_series = pd.concat([old_target, recent_target], ignore_index=True)
+
+        print(f"  - Final shape: {features_df.shape}")
+        print(f"  - Date range preserved: {features_df.index.min()} ~ {features_df.index.max()}")
 
         mlflow.log_metric("final_samples", len(features_df))
         mlflow.log_metric("final_features", len(features_df.columns))
+        mlflow.log_metric("preserved_recent_days", preserve_days)
 
         return features_df, target_series
+
+    def _create_lag_features_minimal(self, data: pd.DataFrame, target_column: str) -> pd.DataFrame:
+        """✅ 최소한의 래그 피처만 생성 (결측치 최소화)"""
+        # 1일, 7일 래그만 사용 (14일은 제외하여 결측치 줄임)
+        lag_days = [1, 7]
+        lag_columns = ['new_cases', 'new_deaths']
+
+        for col in lag_columns:
+            if col in data.columns:
+                try:
+                    for lag in lag_days:
+                        lag_col_name = f'{col}_lag_{lag}'
+                        data[lag_col_name] = data[col].shift(lag)
+                        data[lag_col_name] = data[lag_col_name].replace([np.inf, -np.inf], np.nan)
+                except Exception as e:
+                    print(f"  - Warning in lag features for {col}: {e}")
+
+        return data
 
     def _initial_cleaning(self, data: pd.DataFrame) -> pd.DataFrame:
         """초기 데이터 정제"""

@@ -1,28 +1,58 @@
-"""COVID-19 데이터 수집기 - 수정된 버전"""
+# data-pipeline/src/collectors/covid_collector.py
+# -*- coding: utf-8 -*-
+"""
+OWID COVID-19 데이터 수집기 (탄탄한 네트워크/스키마 일관성/MLflow 로깅 포함)
+"""
+
+from __future__ import annotations
+
+import os
+import json
+import time
+import random
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, List
+
 import pandas as pd
 import requests
-import os, tempfile
-import boto3
-from datetime import datetime, date
-from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
-from typing import Optional, Tuple
 import mlflow
 
 from ..config.settings import ProjectConfig
 from ..utils.mlflow_utils import MLflowManager, create_data_metadata
 
 
-class CovidDataCollector:
-    """수정된 COVID-19 데이터 수집기"""
+@dataclass
+class CollectorOptions:
+    """수집기 동작 옵션"""
+    filter_in_collector: bool = False
+    max_retries: int = 3
+    timeout_connect: int = 5
+    timeout_read: int = 30
+    alt_korea_names: List[str] = None
 
-    def __init__(self, config: Optional[ProjectConfig] = None, tracking_uri: Optional[str] = None):
+    def __post_init__(self):
+        if self.alt_korea_names is None:
+            self.alt_korea_names = ["Republic of Korea", "Korea, South", "South Korea"]
+
+
+class CovidDataCollector:
+    """OWID 실제 데이터 수집기(탄탄 버전)"""
+
+    def __init__(
+            self,
+            config: Optional[ProjectConfig] = None,
+            tracking_uri: Optional[str] = None,
+            options: Optional[CollectorOptions] = None,
+    ):
         self.config = config or ProjectConfig(tracking_uri=tracking_uri)
         if tracking_uri:
             self.config.mlflow.TRACKING_URI = tracking_uri
 
-        # S3 자격증명 확인 및 폴백
-        self._ensure_local_tracking_if_no_s3_creds()
+        self.options = options or CollectorOptions()
 
+        self._ensure_local_tracking_if_no_s3_creds()
         mlflow.set_tracking_uri(self.config.mlflow.TRACKING_URI)
 
         self.mlflow_manager = MLflowManager(
@@ -30,14 +60,17 @@ class CovidDataCollector:
             self.config.mlflow.EXPERIMENT_NAME
         )
 
-        print(f"[collector] tracking_uri = {mlflow.get_tracking_uri()}")
+        print(f"[collector] Tracking URI: {mlflow.get_tracking_uri()}")
+        print(
+            f"[collector] Train period: {self.config.data.TRAIN_START_DATE} ~ {self.config.data.TRAIN_END_DATE or 'auto'}")
+        print(f"[collector] Target: {self.config.data.TARGET_COUNTRY}")
+        print(f"[collector] Filter in collector: {self.options.filter_in_collector}")
 
     def _ensure_local_tracking_if_no_s3_creds(self):
-        """S3 크리덴셜 없으면 로컬 파일 스토어로 폴백"""
+        """S3 크레덴셜 없으면 로컬 파일 스토어로 폴백"""
         uri = (self.config.mlflow.TRACKING_URI or "").strip()
 
-        # 서버 프록시 모드(HTTP/HTTPS)면 폴백 금지
-        if uri.startswith("http://") or uri.startswith("https://"):
+        if uri.startswith(("http://", "https://")):
             return
 
         if uri.startswith("file:"):
@@ -46,7 +79,6 @@ class CovidDataCollector:
             os.makedirs("/tmp/mlruns", exist_ok=True)
             return
 
-        # S3 직접 접근 시도
         try:
             import boto3
             boto3.client("sts").get_caller_identity()
@@ -56,241 +88,274 @@ class CovidDataCollector:
             os.makedirs("/tmp/mlruns", exist_ok=True)
             print("[collector] S3 credentials not found, using local file store")
 
-    def collect_raw_data(self, run_name: Optional[str] = None) -> pd.DataFrame:
-        """원시 데이터 수집 및 MLflow 로깅"""
-
-        with self.mlflow_manager.start_run(run_name):
-            print("Starting MLflow-tracked COVID data collection...")
-
+    def _download_df(self, url: str) -> pd.DataFrame:
+        """리트라이/타임아웃/UA 적용한 다운로드 → pandas 로드"""
+        headers = {"User-Agent": "covid-collector/1.0 (+https://your.domain)"}
+        last_exc: Optional[Exception] = None
+        for i in range(self.options.max_retries):
             try:
-                # 수집 파라미터 로깅
-                self._log_collection_parameters()
-
-                # 데이터 수집 실행
-                korea_data = self._fetch_korea_data()
-
-                # 데이터 검증
-                if korea_data is None or len(korea_data) == 0:
-                    raise ValueError("No data collected")
-
-                print(f"Data collected successfully: {korea_data.shape}")
-
-                # MLflow 로깅
-                self._log_to_mlflow(korea_data)
-
-                print(f"Data collection completed! Check MLflow UI: {self.config.mlflow.TRACKING_URI}")
-                return korea_data
-
+                with requests.get(
+                        url,
+                        headers=headers,
+                        stream=True,
+                        timeout=(self.options.timeout_connect, self.options.timeout_read),
+                ) as r:
+                    r.raise_for_status()
+                return pd.read_csv(url, low_memory=False)
             except Exception as e:
-                print(f"Collection failed: {e}")
-                mlflow.log_param("collection_error", str(e))
-
-                # 오류 발생시 더미 데이터라도 반환 (파이프라인 중단 방지)
-                dummy_data = self._create_dummy_data()
-                self._log_to_mlflow(dummy_data)
-                return dummy_data
-
-    def _create_dummy_data(self) -> pd.DataFrame:
-        """수집 실패시 더미 데이터 생성"""
-        print("Creating dummy data for pipeline continuity...")
-
-        dates = pd.date_range(start='2024-01-01', end='2024-12-31', freq='D')
-        dummy_data = pd.DataFrame({
-            'date': dates,
-            'country': 'South Korea',
-            'new_cases': range(len(dates)),
-            'total_cases': range(1000, 1000 + len(dates)),
-            'new_deaths': [1] * len(dates),
-            'total_deaths': range(100, 100 + len(dates)),
-            'collected_at': datetime.now(),
-            'data_source': 'DUMMY',
-            'collector': 'MLflowCovidCollector'
-        })
-
-        mlflow.log_param("data_type", "dummy")
-        return dummy_data
+                last_exc = e
+                backoff = 1.5 * (i + 1) + random.random()
+                print(f"[download] attempt {i + 1}/{self.options.max_retries} failed: {e} → retry in {backoff:.1f}s")
+                time.sleep(backoff)
+        raise last_exc
 
     def _log_collection_parameters(self) -> None:
-        """수집 파라미터를 MLflow에 로깅"""
+        """수집 파라미터 로깅"""
         mlflow.log_param("data_source_url", self.config.data.OWID_URL)
         mlflow.log_param("target_country", self.config.data.TARGET_COUNTRY)
-        mlflow.log_param("chunk_size", self.config.data.CHUNK_SIZE)
-        mlflow.log_param("filter_future_dates", self.config.data.FILTER_FUTURE_DATES)
+        mlflow.log_param("train_start", self.config.data.TRAIN_START_DATE)
+
+        # TRAIN_END_DATE 처리
+        train_end = self.config.data.TRAIN_END_DATE
+        if not train_end or not train_end.strip():
+            train_end = (pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        mlflow.log_param("train_end", train_end)
+
         mlflow.log_param("collection_timestamp", datetime.now().isoformat())
-        mlflow.log_param("collector_version", "v1.1_fixed")
+        mlflow.log_param("collector_version", "v3.1_future_filter")
+        mlflow.log_param("filter_in_collector", self.options.filter_in_collector)
 
-    def _fetch_korea_data(self) -> pd.DataFrame:
-        """한국 COVID 데이터 수집"""
-        print("Fetching Korea data from OWID...")
-
-        korea_chunks = []
-        chunks_processed = 0
-
-        try:
-            # 데이터 소스 연결 테스트
-            response = requests.head(self.config.data.OWID_URL, timeout=30)
-            if response.status_code != 200:
-                raise ConnectionError(f"Cannot access data source: {response.status_code}")
-
-            # 청크 단위로 데이터 읽기
-            for chunk in pd.read_csv(self.config.data.OWID_URL, chunksize=self.config.data.CHUNK_SIZE):
-                chunks_processed += 1
-                print(f"Processing chunk {chunks_processed}...")
-
-                # 한국 데이터 필터링
-                korea_in_chunk = chunk[
-                    chunk[self.config.data.COUNTRY_COLUMN] == self.config.data.TARGET_COUNTRY
-                ].copy()
-
-                if len(korea_in_chunk) > 0:
-                    korea_chunks.append(korea_in_chunk)
-                    print(f"Found Korea data in chunk {chunks_processed}: {len(korea_in_chunk)} rows")
-
-                # 최대 10개 청크만 처리 (메모리 절약)
-                if chunks_processed >= 10:
-                    break
-
-            # 청크 병합
-            if korea_chunks:
-                korea_raw = pd.concat(korea_chunks, ignore_index=True)
-                print(f"Total Korea data collected: {len(korea_raw)} rows")
+    def _preprocess_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        """스키마 표준화: location 보장 + 전처리 호환 country 보조 컬럼"""
+        if "location" not in df.columns:
+            if "country" in df.columns:
+                df = df.rename(columns={"country": "location"})
             else:
-                raise ValueError("No Korea data found in the dataset")
+                raise ValueError(f"'location' column not found. Columns: {list(df.columns)[:20]}")
+        if "country" not in df.columns:
+            df["country"] = df["location"]
+        return df
 
-            # 데이터 전처리
-            korea_raw = self._preprocess_data(korea_raw)
+    def _filter_korea(self, df: pd.DataFrame) -> pd.DataFrame:
+        """한국 데이터 필터링 (대체명 포함)"""
+        target = self.config.data.TARGET_COUNTRY
+        korea = df[df["location"] == target]
+        if korea.empty:
+            for alt in self.options.alt_korea_names:
+                tmp = df[df["location"] == alt]
+                if not tmp.empty:
+                    print(f"[filter] Found '{alt}' instead of '{target}': {len(tmp)} rows")
+                    korea = tmp
+                    break
+        if korea.empty:
+            sample = df["location"].dropna().unique().tolist()[:20]
+            raise ValueError(f"No Korea rows found. Sample locations: {sample}")
+        return korea.copy()
 
-            # 수집 통계 로깅
-            mlflow.log_metric("chunks_processed", chunks_processed)
-            mlflow.log_metric("chunks_with_korea_data", len(korea_chunks))
+    def _postprocess_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+        """날짜 파싱/정렬 + 메타 컬럼 + 미래 날짜 제거"""
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        invalid = df["date"].isna().sum()
+        if invalid:
+            print(f"[preprocess] drop rows with invalid date: {invalid}")
+            df = df.dropna(subset=["date"])
 
-            return korea_raw
+        # ✅ 미래 날짜 필터링
+        today = pd.Timestamp.now().normalize()
+        future_mask = df["date"] > today
+        future_count = future_mask.sum()
 
-        except Exception as e:
-            print(f"Data fetching error: {e}")
-            raise
+        if future_count > 0:
+            print(f"[preprocess] ⚠️  Removing {future_count} future date rows (after {today.date()})")
+            df = df[~future_mask].copy()
 
-    def _preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        """데이터 전처리"""
-        print("Preprocessing collected data...")
+        df = df.sort_values("date").reset_index(drop=True)
 
-        # 날짜 변환
-        data['date'] = pd.to_datetime(data['date'])
+        df["collected_at"] = pd.Timestamp.now()
+        df["data_source"] = "OWID"
+        df["collector"] = "CovidCollector_v3.1"
 
-        # 미래 날짜 필터링
-        if self.config.data.FILTER_FUTURE_DATES:
-            before_filter = len(data)
-            today = date.today()
-            data = data[data['date'].dt.date <= today].copy()
-            after_filter = len(data)
+        print(f"[preprocess] Final date range: {df['date'].min().date()} ~ {df['date'].max().date()}")
 
-            # 필터링 결과 로깅
-            mlflow.log_metric("rows_before_date_filter", before_filter)
-            mlflow.log_metric("rows_after_date_filter", after_filter)
-            mlflow.log_metric("future_dates_removed", before_filter - after_filter)
+        return df
 
-            print(f"Filtered future dates: {before_filter} → {after_filter} rows")
+    def _maybe_filter_by_train_range(self, df: pd.DataFrame) -> pd.DataFrame:
+        """✅ 수정: 미래 날짜 제거 + 선택적 날짜 범위 필터링"""
 
-        # 메타데이터 컬럼 추가
-        data['collected_at'] = datetime.now()
-        data['data_source'] = 'OWID'
-        data['collector'] = 'MLflowCovidCollector'
+        # ✅ 1단계: 항상 미래 날짜는 제거
+        today = pd.Timestamp.now().normalize()
+        before_future_filter = len(df)
+        df = df[df["date"] <= today].copy()
+        after_future_filter = len(df)
 
-        return data
+        future_removed = before_future_filter - after_future_filter
+        if future_removed > 0:
+            print(f"[range] Removed {future_removed} future date rows")
+            mlflow.log_metric("future_rows_removed", future_removed)
 
-    def _log_to_mlflow(self, data: pd.DataFrame) -> None:
-        """데이터를 MLflow에 로깅"""
-        print("Logging data to MLflow...")
+        # ✅ 2단계: filter_in_collector=False면 전체 데이터 보존
+        if not self.options.filter_in_collector:
+            print(f"[range] Keeping all historical data: {len(df):,} rows")
+            print(f"[range] Date range: {df['date'].min().date()} ~ {df['date'].max().date()}")
 
+            # 메트릭만 로깅
+            start = pd.to_datetime(self.config.data.TRAIN_START_DATE)
+            mlflow.log_param("data_start_date", str(df['date'].min().date()))
+            mlflow.log_param("data_end_date", str(df['date'].max().date()))
+            mlflow.log_param("config_train_start", str(start.date()))
+            mlflow.log_metric("total_rows", len(df))
+
+            return df
+
+        # ✅ 3단계: 필터링 활성화된 경우에만 날짜 범위 필터링
+        start = pd.to_datetime(self.config.data.TRAIN_START_DATE)
+
+        # TRAIN_END_DATE 처리
+        if self.config.data.TRAIN_END_DATE and self.config.data.TRAIN_END_DATE.strip():
+            end = pd.to_datetime(self.config.data.TRAIN_END_DATE)
+        else:
+            # 빈 값이면 어제 날짜
+            end = today - pd.Timedelta(days=1)
+
+        before = len(df)
+        df = df[(df["date"] >= start) & (df["date"] <= end)].copy()
+        after = len(df)
+
+        print(f"[range] Filtered by train period: {before:,} -> {after:,} rows")
+        print(f"[range] Train range: {start.date()} ~ {end.date()}")
+        mlflow.log_param("collector_date_filter_applied", True)
+        mlflow.log_metric("rows_before_filter", before)
+        mlflow.log_metric("rows_after_filter", after)
+
+        return df
+
+    def _log_basic_stats(self, df: pd.DataFrame) -> None:
+        """핵심 통계 로깅"""
+        if "new_cases" in df.columns:
+            stats = df["new_cases"].describe()
+            mlflow.log_metric("new_cases_count", float(stats.get("count", 0)))
+            mlflow.log_metric("new_cases_mean", float(stats.get("mean", 0)))
+            mlflow.log_metric("new_cases_std", float(stats.get("std", 0)))
+            mlflow.log_metric("new_cases_min", float(stats.get("min", 0)))
+            mlflow.log_metric("new_cases_max", float(stats.get("max", 0)))
+
+        if "date" in df.columns and len(df) > 0:
+            mlflow.log_metric("date_range_days", int((df["date"].max() - df["date"].min()).days))
+
+    def _log_artifacts(self, df: pd.DataFrame) -> None:
+        """CSV/메타데이터를 MLflow 아티팩트로 저장"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_filename = f"korea_covid_raw_{timestamp}.csv"
+        meta_filename = f"metadata_{timestamp}.json"
+
+        tmp_dir = tempfile.gettempdir()
+        csv_path = os.path.join(tmp_dir, csv_filename)
+        meta_path = os.path.join(tmp_dir, meta_filename)
+
+        # CSV 저장
+        df.to_csv(csv_path, index=False)
+        mlflow.log_artifact(csv_path, artifact_path=self.config.mlflow.ARTIFACT_PATH)
+
+        # 메타데이터
+        metadata = create_data_metadata(
+            data=df,
+            collection_info={
+                "source_url": self.config.data.OWID_URL,
+                "target_country": self.config.data.TARGET_COUNTRY,
+                "train_start": self.config.data.TRAIN_START_DATE,
+                "train_end": self.config.data.get_train_end_date(),
+                "data_source": df.get("data_source", pd.Series(["UNKNOWN"])).iloc[0],
+            },
+        )
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        mlflow.log_artifact(meta_path, artifact_path=f"{self.config.mlflow.ARTIFACT_PATH}/metadata")
+
+        # 정리
         try:
-            # 기본 데이터 메트릭 로깅
-            self.mlflow_manager.log_data_metrics(data)
+            os.remove(csv_path)
+            os.remove(meta_path)
+        except Exception:
+            pass
 
-            # 주요 컬럼 가용성 로깅
-            key_columns = [
-                'new_cases', 'total_cases', 'new_deaths', 'total_deaths',
-                'people_vaccinated_per_hundred', 'people_fully_vaccinated_per_hundred',
-                'stringency_index', 'reproduction_rate'
-            ]
-            self.mlflow_manager.log_column_availability(data, key_columns)
+        print("[mlflow] logged artifacts:")
+        print(f"  - {self.config.mlflow.ARTIFACT_PATH}/{csv_filename}")
+        print(f"  - {self.config.mlflow.ARTIFACT_PATH}/metadata/{meta_filename}")
 
-            # 날짜 범위 정보
-            if 'date' in data.columns:
-                date_range_days = (data['date'].max() - data['date'].min()).days
-                mlflow.log_metric("date_range_days", date_range_days)
-                mlflow.log_param("date_start", data['date'].min().strftime('%Y-%m-%d'))
-                mlflow.log_param("date_end", data['date'].max().strftime('%Y-%m-%d'))
+    def collect_raw_data(self, run_name: Optional[str] = None) -> pd.DataFrame:
+        """OWID → 한국 데이터 수집(원본 보존 권장), MLflow 로깅 포함"""
+        with self.mlflow_manager.start_run(run_name):
+            print("\n" + "=" * 60)
+            print("Starting OWID COVID-19 data collection...")
+            print("=" * 60)
 
-            # 데이터셋 등록
-            self.mlflow_manager.log_dataset(
-                data=data,
-                source_url=self.config.data.OWID_URL,
-                name="korea_covid_raw_dataset",
-                context="raw_data_collection"
-            )
+            try:
+                self._log_collection_parameters()
 
-            # CSV 아티팩트 저장
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_filename = f"korea_covid_raw_{timestamp}.csv"
+                print(f"[step] download: {self.config.data.OWID_URL}")
+                df_all = self._download_df(self.config.data.OWID_URL)
+                print(f"[ok] downloaded: {len(df_all):,} rows, {len(df_all.columns)} columns")
 
-            # 안전한 임시 디렉토리 사용
-            tmp_dir = tempfile.gettempdir()
-            local_csv_path = os.path.join(tmp_dir, csv_filename)
+                df_all = self._preprocess_schema(df_all)
+                df_kr = self._filter_korea(df_all)
+                print(f"[ok] korea rows: {len(df_kr):,}")
 
-            # 저장
-            data.to_csv(local_csv_path, index=False)
+                df_kr = self._postprocess_frame(df_kr)
+                df_kr = self._maybe_filter_by_train_range(df_kr)
 
-            # MLflow에 아티팩트로 업로드
-            artifact_path = self.config.mlflow.ARTIFACT_PATH
-            mlflow.log_artifact(local_csv_path, artifact_path=artifact_path)
+                # 간단 콘솔 요약
+                if len(df_kr):
+                    print(f"[range] {df_kr['date'].min().date()} ~ {df_kr['date'].max().date()}")
 
-            # 메타데이터 생성 및 저장
-            metadata = create_data_metadata(
-                data=data,
-                collection_info={
-                    'source_url': self.config.data.OWID_URL,
-                    'target_country': self.config.data.TARGET_COUNTRY,
-                    'chunk_size': self.config.data.CHUNK_SIZE
-                }
-            )
+                # MLflow 로깅
+                self.mlflow_manager.log_data_metrics(df_kr)
+                self.mlflow_manager.log_column_availability(
+                    df_kr,
+                    [
+                        "new_cases", "total_cases", "new_deaths", "total_deaths",
+                        "stringency_index", "reproduction_rate",
+                    ],
+                )
+                self._log_basic_stats(df_kr)
 
-            metadata_filename = f"metadata_{timestamp}.json"
-            local_meta_path = os.path.join(tmp_dir, metadata_filename)
+                self.mlflow_manager.log_dataset(
+                    data=df_kr,
+                    source_url=self.config.data.OWID_URL,
+                    name="korea_covid_dataset_raw",
+                    context="raw_data_collection",
+                )
 
-            # 저장
-            import json
-            with open(local_meta_path, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, ensure_ascii=False, indent=2)
+                self._log_artifacts(df_kr)
 
-            # 로깅
-            mlflow.log_artifact(local_meta_path, artifact_path=os.path.join(artifact_path, "metadata"))
+                print("=" * 60 + "\n")
+                return df_kr
 
-            # 임시 파일 정리
-            os.remove(local_csv_path)
-            os.remove(local_meta_path)
+            except Exception as e:
+                print(f"\n[ERROR] collection failed: {e}")
+                mlflow.log_param("collection_error", str(e))
+                raise
 
-            print("Data logged to MLflow successfully:")
-            print(f"  - CSV artifact: {artifact_path}/{csv_filename}")
-            print(f"  - Metadata: {artifact_path}/metadata/{metadata_filename}")
-
-        except Exception as e:
-            print(f"MLflow logging error: {e}")
-            # 로깅 실패해도 데이터는 반환
-
-    def run(self, run_name: Optional[str] = None):
+    def run(self, run_name: Optional[str] = None) -> pd.DataFrame:
         return self.collect_raw_data(run_name=run_name)
 
 
 def main():
-    """메인 실행 함수"""
-    collector = CovidDataCollector()
-    data = collector.collect_raw_data()
+    collector = CovidDataCollector(
+        options=CollectorOptions(
+            filter_in_collector=False
+        )
+    )
+    df = collector.collect_raw_data(run_name="collect_owid_korea")
 
-    print(f"\nCollection Summary:")
-    print(f"  Rows: {len(data):,}")
-    print(f"  Columns: {len(data.columns)}")
-    print(f"  Date range: {data['date'].min()} ~ {data['date'].max()}")
-    print(f"  Missing values: {data.isnull().sum().sum():,}")
+    print("\n" + "=" * 60)
+    print("Collection Summary")
+    print("=" * 60)
+    print(f"Rows:        {len(df):,}")
+    print(f"Columns:     {len(df.columns)}")
+    print(f"Date range:  {df['date'].min().date()} ~ {df['date'].max().date()}" if len(df) else "N/A")
+    print(f"Missing sum: {int(df.isnull().sum().sum()) if len(df) else 0:,}")
+    print(f"Source:      {df['data_source'].iloc[0] if len(df) and 'data_source' in df.columns else 'Unknown'}")
+    print("=" * 60 + "\n")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,13 @@ Feature engineering task - 개선된 버전
 - 폴백 메커니즘 추가
 - 에러 처리 개선
 """
+
+import io
+import boto3
+import pandas as pd
 import os, sys, argparse
+from urllib.parse import urlparse
+from datetime import datetime
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 if PROJECT_ROOT not in sys.path:
@@ -102,6 +108,33 @@ def load_processed_data_safe(tracking_uri=None):
         print(f"[fe] Data loading failed: {e}")
         return None
 
+# src/pipeline/tasks/fe.py (핵심 추가/변경만)
+
+
+def _save_csv_to_s3(df, s3_uri: str) -> str:
+    """
+    s3_uri가 's3://bucket/prefix/'(프리픽스)면
+    s3://bucket/prefix/covid_features_{ts}.csv 로 저장.
+    파일명(.csv)로 끝나면 그대로 저장.
+    """
+    u = urlparse(s3_uri)
+    assert u.scheme == "s3", f"Invalid S3 URI: {s3_uri}"
+    bucket = u.netloc
+    key = u.path.lstrip("/")
+    if not key or key.endswith("/"):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        key = key.rstrip("/") + f"/covid_features_{ts}.csv"
+
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    boto3.client("s3").put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=buf.getvalue().encode("utf-8"),
+        ContentType="text/csv",
+    )
+    return f"s3://{bucket}/{key}"
+
 
 def create_dummy_processed_data():
     """더미 전처리 데이터 생성"""
@@ -130,12 +163,23 @@ def create_dummy_processed_data():
 
     return dummy_data
 
+def _slice_last_n_days(df, n_days: int, date_col: str = "date") -> pd.DataFrame:
+    if date_col not in df.columns:
+        raise ValueError(f"'{date_col}' column is required")
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col]).sort_values(date_col)
+    end = df[date_col].max()
+    start = end - pd.Timedelta(days=n_days - 1)
+    return df[(df[date_col] >= start) & (df[date_col] <= end)].reset_index(drop=True)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-name", type=str, default="feature_engineering_v1")
     ap.add_argument("--target", type=str, default="new_cases")
     ap.add_argument("--tracking-uri", type=str, default=None)
+    ap.add_argument("--output", type=str, default="/tmp/features.csv")  # ⭐ 추가
+    ap.add_argument("--train-window-days", type=int, default=365, help="최근 N일 구간으로 슬라이스")
     args = ap.parse_args()
 
     print(f"[fe] Starting feature engineering task...")
@@ -148,6 +192,18 @@ def main():
     if processed is None:
         print("[fe] Processed data not found, creating dummy data...")
         processed = create_dummy_processed_data()
+
+    # ✅ 슬라이싱: 기본적으로 전체 데이터 사용
+    if args.train_window_days:
+        try:
+            processed = _slice_last_n_days(processed, args.train_window_days, "date")
+            print(f"[fe] Sliced to last {args.train_window_days}d: {len(processed)} rows")
+        except Exception as e:
+            print(f"[fe] slice warning: {e}, using all data")
+    else:
+        print(f"[fe] Using all available data: {len(processed)} rows")
+        if 'date' in processed.columns:
+            print(f"[fe] Date range: {processed['date'].min()} ~ {processed['date'].max()}")
 
     # 타겟 컬럼 확인
     if args.target not in processed.columns:
@@ -176,8 +232,28 @@ def main():
         print(f"[fe] Features shape: {features_df.shape}")
         print(f"[fe] Target shape: {len(target_series)}")
 
+        # ⭐ 로컬 파일로 저장 (권한 에러 처리)
+        try:
+            if args.output.startswith("s3://"):
+                saved_path = _save_csv_to_s3(features_df, args.output)  # ← S3 업로드
+                print(f"[fe] Features saved to S3: {saved_path}")
+            else:
+                output_dir = os.path.dirname(args.output)
+                if output_dir and not os.path.exists(output_dir):
+                    os.makedirs(output_dir, exist_ok=True)
+                features_df.to_csv(args.output, index=False)  # ← 로컬 저장
+                print(f"[fe] Features saved to: {args.output}")
+        except PermissionError as pe:
+            print(f"[fe] Permission error saving to {args.output}: {pe}")
+            fallback_path = "/tmp/features.csv"
+            features_df.to_csv(fallback_path, index=False)
+            print(f"[fe] Features saved to fallback location: {fallback_path}")
+
     except Exception as e:
         print(f"[fe] Feature engineering failed: {e}")
+
+        import traceback
+        traceback.print_exc()  # ⭐ 전체 에러 스택 출력
 
         # 폴백: 간단한 특성 엔지니어링
         print("[fe] Fallback to simple feature engineering...")
@@ -237,6 +313,15 @@ def main():
             os.remove(f"/tmp/target_{timestamp}.csv")
 
             print(f"[fe] Simple feature engineering completed: {features_df.shape}")
+
+            # 폴백 except 블록의 마지막
+            try:
+                features_df.to_csv(args.output, index=False)  # ⭐ 타겟 없이
+                print(f"[fe] Fallback features saved to: {args.output}")
+            except Exception as save_error:
+                fallback_path = "/tmp/features.csv"
+                features_df.to_csv(fallback_path, index=False)  # ⭐ 타겟 없이
+                print(f"[fe] Features saved to final fallback: {fallback_path}")
 
 
 if __name__ == "__main__":

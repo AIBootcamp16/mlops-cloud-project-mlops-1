@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# (선택) 요구사항 파일로 설치하면 캐시 활용이 좋아요
+# COPY infrastructure/docker/requirements.txt /tmp/requirements.txt
+# RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# 간단히 패키지 바로 설치도 가능
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn[standard] \
+    mlflow==2.14.1 \
+    pandas \
+    numpy==1.26.4 \
+    scikit-learn==1.4.2 \
+    boto3
+
+# main.py가 바로 /app/api/main.py가 되도록 src 레벨을 벗겨서 복사
+COPY api-service/src /app/api
+# 파이프라인 코드 실제 위치에 맞춰 복사 (스크린샷 기준: data-pipeline/src)
+COPY data-pipeline/src /app/src
+
+ENV PYTHONPATH=/app
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
