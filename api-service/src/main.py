@@ -18,34 +18,28 @@ app = FastAPI(title="COVID-19 Prediction API")
 MLFLOW_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 mlflow.set_tracking_uri(MLFLOW_URI)
 
-# 동적 예측 창: "1"(기본) → 학습 최종 관측일+1 ~ +MAX_FORECAST_DAYS
 AUTO_PREDICT_WINDOW = os.getenv("AUTO_PREDICT_WINDOW", "1").strip()
-
-# 고정 모드에서만 쓰는 값 (AUTO_PREDICT_WINDOW="0"일 때)
-TRAIN_END_DATE = os.getenv("TRAIN_END_DATE", "").strip()       # ""면 자동
+TRAIN_END_DATE = os.getenv("TRAIN_END_DATE", "").strip()
 PREDICT_START_DATE = os.getenv("PREDICT_START_DATE", "").strip()
 PREDICT_END_DATE = os.getenv("PREDICT_END_DATE", "").strip()
-
 MAX_FORECAST_DAYS = int(os.getenv("MAX_FORECAST_DAYS", "30"))
 
 FEATURES_S3_PREFIX = os.getenv("FEATURES_S3_PREFIX", "").strip()
 FEATURES_LOCAL_PATH = os.getenv("FEATURES_LOCAL_PATH", "/workspace/data/features/latest_features.csv").strip()
 
-# --- NEW: 오늘까지 창 자동 확장 옵션 & 절대 상한 ---
 ALLOW_EXTEND_TO_TODAY = os.getenv("ALLOW_EXTEND_TO_TODAY", "1").strip()
 ABS_MAX_FORECAST_DAYS = int(os.getenv("ABS_MAX_FORECAST_DAYS", "365"))
 
-# 모델/피처 공유 상태
 model = None
 feature_columns: list[str] = []
 features_df_cached: Optional[pd.DataFrame] = None
 target_history: list[float] = []
 
-# 피처 구성 기본 스펙
 LOOKBACKS = [1, 3, 7, 14]
 ROLLS = [7, 14, 30]
 TARGET = "new_cases"
 EPS = 1e-9
+
 
 # -------------------- IO HELPERS --------------------
 def _read_csv_from_s3(s3_uri: str) -> pd.DataFrame:
@@ -55,6 +49,7 @@ def _read_csv_from_s3(s3_uri: str) -> pd.DataFrame:
     bucket, key = u.netloc, u.path.lstrip("/")
     obj = boto3.client("s3").get_object(Bucket=bucket, Key=key)
     return pd.read_csv(BytesIO(obj["Body"].read()))
+
 
 def _read_latest_csv_under_prefix(prefix: str) -> pd.DataFrame:
     u = urlparse(prefix)
@@ -73,20 +68,58 @@ def _read_latest_csv_under_prefix(prefix: str) -> pd.DataFrame:
         raise FileNotFoundError(f"No CSV under {prefix}")
     return _read_csv_from_s3(f"s3://{bucket}/{latest['Key']}")
 
+
 def load_features_df() -> pd.DataFrame:
-    """피처 데이터 로드 (S3 prefix 우선 → 로컬 → fallback)."""
+    """피처 데이터 로드 (S3 prefix 우선 → S3 전체 스캔 → 로컬 → fallback)."""
+
+    # 1순위: S3 prefix
     if FEATURES_S3_PREFIX:
         try:
-            print(f"[load_features] Trying S3: {FEATURES_S3_PREFIX}")
+            print(f"[load_features] Trying S3 prefix: {FEATURES_S3_PREFIX}")
             if FEATURES_S3_PREFIX.endswith(".csv"):
                 df = _read_csv_from_s3(FEATURES_S3_PREFIX)
             else:
                 df = _read_latest_csv_under_prefix(FEATURES_S3_PREFIX)
-            print(f"[load_features] S3 load success: {df.shape}")
+            print(f"[load_features] S3 prefix load success: {df.shape}")
             return df
         except Exception as e:
-            print(f"[load_features] S3 load failed: {e}")
+            print(f"[load_features] S3 prefix load failed: {e}")
 
+    # 2순위: S3 전체 스캔
+    try:
+        print("[load_features] Trying S3 full scan...")
+        artifact_root = os.getenv(
+            "MLFLOW_DEFAULT_ARTIFACT_ROOT",
+            "s3://mlflow-dev-artifacts-team1-covid/mlflow-artifacts"
+        )
+        parsed = urlparse(artifact_root)
+        bucket = parsed.netloc
+        prefix = parsed.path.lstrip("/")
+
+        s3 = boto3.client("s3")
+        paginator = s3.get_paginator("list_objects_v2")
+
+        csv_files = []
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith(".csv") and "covid_features_" in key:
+                    csv_files.append({
+                        "key": key,
+                        "last_modified": obj["LastModified"]
+                    })
+
+        if csv_files:
+            latest = max(csv_files, key=lambda x: x["last_modified"])
+            print(f"[load_features] Found latest: {latest['key']}")
+            df = _read_csv_from_s3(f"s3://{bucket}/{latest['key']}")
+            print(f"[load_features] S3 full scan success: {df.shape}")
+            return df
+
+    except Exception as e:
+        print(f"[load_features] S3 full scan failed: {e}")
+
+    # 3순위: 로컬 경로
     try:
         print(f"[load_features] Trying local: {FEATURES_LOCAL_PATH}")
         df = pd.read_csv(FEATURES_LOCAL_PATH)
@@ -95,8 +128,10 @@ def load_features_df() -> pd.DataFrame:
     except Exception as e:
         print(f"[load_features] Local path load failed: {e}")
 
+    # 4순위: fallback
     print(f"[load_features] Trying fallback: /tmp/features.csv")
     return pd.read_csv("/tmp/features.csv")
+
 
 # -------------------- HISTORY / FEATURE-NAMES --------------------
 def reconstruct_target_history(df: pd.DataFrame) -> List[float]:
@@ -105,7 +140,7 @@ def reconstruct_target_history(df: pd.DataFrame) -> List[float]:
 
     if len(df) == 0:
         print("[reconstruct_history] WARNING: Empty dataframe, using dummy history")
-        return [50000.0] * 100  # 안전한 더미
+        return [50000.0] * 100
 
     hist: List[float] = []
 
@@ -122,10 +157,10 @@ def reconstruct_target_history(df: pd.DataFrame) -> List[float]:
 
         if hist:
             print(f"[reconstruct_history] Collected {len(hist)} values")
-            print(f"[reconstruct_history] Stats - min: {min(hist):.2f}, max: {max(hist):.2f}, mean: {np.mean(hist):.2f}")
+            print(
+                f"[reconstruct_history] Stats - min: {min(hist):.2f}, max: {max(hist):.2f}, mean: {np.mean(hist):.2f}")
             return hist
 
-    # fallback: lag_1 기반 복원
     lag_col = f"{TARGET}_lag_1"
     if lag_col in df.columns:
         print(f"[reconstruct_history] Found {lag_col} column")
@@ -145,6 +180,7 @@ def reconstruct_target_history(df: pd.DataFrame) -> List[float]:
 
     print("[reconstruct_history] WARNING: Cannot reconstruct, using dummy history")
     return [50000.0] * 100
+
 
 def _consecutive_runs(arr: np.ndarray) -> tuple[float, float]:
     """증가/감소 연속 길이(마지막 원소 기준)를 계산"""
@@ -166,6 +202,7 @@ def _consecutive_runs(arr: np.ndarray) -> tuple[float, float]:
             break
     return float(inc), float(dec)
 
+
 def _build_features_for_step(hist: List[float], feature_cols: List[str]) -> dict:
     """hist(현재까지의 예측 포함)로부터 시그니처에 맞는 피처를 생성해 dict로 반환"""
     x = {}
@@ -173,20 +210,18 @@ def _build_features_for_step(hist: List[float], feature_cols: List[str]) -> dict
     if arr.size == 0:
         arr = np.array([0.0], dtype=float)
 
-    # LAG
     for lag in (1, 3, 7, 14):
         name = f"{TARGET}_lag_{lag}"
         if name in feature_cols:
             idx = -lag
             x[name] = float(arr[idx]) if arr.size >= lag else float(arr[-1])
 
-    # ROLLINGS
     for w in (7, 14, 30):
         win = arr[-w:] if arr.size >= w else arr
         mean_v = float(np.mean(win)) if win.size else 0.0
-        std_v  = float(np.std(win)) if win.size else 0.0
-        max_v  = float(np.max(win)) if win.size else 0.0
-        min_v  = float(np.min(win)) if win.size else 0.0
+        std_v = float(np.std(win)) if win.size else 0.0
+        max_v = float(np.max(win)) if win.size else 0.0
+        min_v = float(np.min(win)) if win.size else 0.0
         mapping = {
             f"{TARGET}_rolling_mean_{w}": mean_v,
             f"{TARGET}_rolling_std_{w}": std_v,
@@ -197,7 +232,6 @@ def _build_features_for_step(hist: List[float], feature_cols: List[str]) -> dict
             if cname in feature_cols:
                 x[cname] = val
 
-    # TREND / ACCELERATION
     for w in (7, 14, 30):
         cname = f"{TARGET}_trend_{w}"
         if cname in feature_cols:
@@ -215,7 +249,6 @@ def _build_features_for_step(hist: List[float], feature_cols: List[str]) -> dict
                 val = float(t_now - t_prev)
             x[cname] = val
 
-    # RATIO TO MA
     for w in (7, 14, 30):
         cname = f"{TARGET}_ratio_to_ma_{w}"
         if cname in feature_cols:
@@ -223,14 +256,12 @@ def _build_features_for_step(hist: List[float], feature_cols: List[str]) -> dict
             ma = float(np.mean(win)) if win.size else 0.0
             x[cname] = float(arr[-1] / (ma + EPS)) if ma > 0 else 1.0
 
-    # VOLATILITY (= rolling std)
     for w in (7, 14):
         cname = f"{TARGET}_volatility_{w}"
         if cname in feature_cols:
             win = arr[-w:] if arr.size >= w else arr
             x[cname] = float(np.std(win)) if win.size else 0.0
 
-    # CONSECUTIVE RUNS
     need_inc = f"{TARGET}_consecutive_increase" in feature_cols
     need_dec = f"{TARGET}_consecutive_decrease" in feature_cols
     if need_inc or need_dec:
@@ -240,12 +271,12 @@ def _build_features_for_step(hist: List[float], feature_cols: List[str]) -> dict
         if need_dec:
             x[f"{TARGET}_consecutive_decrease"] = dec
 
-    # IS_PEAK (최근 7일 최대와 같으면 peak로)
     if f"{TARGET}_is_peak" in feature_cols:
         win = arr[-7:] if arr.size >= 7 else arr
         x[f"{TARGET}_is_peak"] = float(arr[-1] >= (np.max(win) - EPS)) if win.size else 0.0
 
     return x
+
 
 def _safe_cap(hist: List[float]) -> float:
     """출력 상한 계산(폭주 방지)."""
@@ -256,6 +287,7 @@ def _safe_cap(hist: List[float]) -> float:
     p995 = float(np.quantile(arr, 0.995))
     recent_max = float(np.max(arr))
     return max(10_000.0, 1.5 * p995, 1.5 * recent_max)
+
 
 def _try_load_feature_names_from_artifacts() -> Optional[List[str]]:
     """모델 최신 버전 런의 metadata/feature_names_*.json 폴백 로드."""
@@ -279,6 +311,7 @@ def _try_load_feature_names_from_artifacts() -> Optional[List[str]]:
         pass
     return None
 
+
 def _extract_feature_columns_from_signature() -> Optional[List[str]]:
     try:
         info = mlflow.models.get_model_info("models:/covid_prediction_model/Production")
@@ -290,6 +323,7 @@ def _extract_feature_columns_from_signature() -> Optional[List[str]]:
         print(f"[startup] signature parse failed: {e}")
     return None
 
+
 # -------------------- STARTUP --------------------
 @app.on_event("startup")
 def load_model():
@@ -299,7 +333,6 @@ def load_model():
     print("STARTUP")
     print("=" * 50)
 
-    # 1) 모델 로드
     model_uri = "models:/covid_prediction_model/Production"
     try:
         model = mlflow.pyfunc.load_model(model_uri)
@@ -308,7 +341,6 @@ def load_model():
         print(f"✗ Model load failed: {e}")
         raise
 
-    # 2) 피처 로드
     try:
         features_df_cached = load_features_df()
         print(f"✓ Features loaded: {features_df_cached.shape}")
@@ -318,7 +350,6 @@ def load_model():
         print(f"✗ Features load failed: {e}")
         raise
 
-    # 3) 날짜 컬럼 정규화
     date_col = None
     for col in ["date", "Date", "DATE", "ds"]:
         if col in features_df_cached.columns:
@@ -329,48 +360,53 @@ def load_model():
         raise ValueError("No date column found in features CSV!")
 
     print(f"  Found date column: {date_col}")
-    print(f"  Date dtype before: {features_df_cached[date_col].dtype}")
+    print(f"  Original dtype: {features_df_cached[date_col].dtype}")
 
-    # 다양한 포맷 시도
-    date_formats = [
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-        "%d-%m-%Y",
-        "%m/%d/%Y",
-        "%Y%m%d",
-        "%Y-%m-%d %H:%M:%S",
-    ]
-    converted = False
-    for fmt in date_formats:
-        try:
-            features_df_cached[date_col] = pd.to_datetime(features_df_cached[date_col], format=fmt, errors="raise")
-            print(f"  ✓ Converted with format: {fmt}")
-            converted = True
-            break
-        except Exception:
-            continue
-    if not converted:
-        print("  Trying automatic inference...")
-        features_df_cached[date_col] = pd.to_datetime(features_df_cached[date_col], infer_datetime_format=True, errors="coerce")
-        print("  ✓ Converted with automatic inference")
+    if features_df_cached[date_col].dtype == "object":
+        date_formats = ["%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%m/%d/%Y", "%Y%m%d"]
+        converted = False
 
-    # 'date'로 통일 + NaT 제거 + 정렬
+        for fmt in date_formats:
+            try:
+                features_df_cached[date_col] = pd.to_datetime(
+                    features_df_cached[date_col],
+                    format=fmt,
+                    errors="raise"
+                )
+                print(f"  ✓ Converted with format: {fmt}")
+                converted = True
+                break
+            except Exception:
+                continue
+
+        if not converted:
+            print("  Trying automatic inference...")
+            features_df_cached[date_col] = pd.to_datetime(
+                features_df_cached[date_col],
+                errors="coerce"
+            )
+    elif not pd.api.types.is_datetime64_any_dtype(features_df_cached[date_col]):
+        features_df_cached[date_col] = pd.to_datetime(
+            features_df_cached[date_col],
+            errors="coerce"
+        )
+
     if date_col != "date":
         features_df_cached.rename(columns={date_col: "date"}, inplace=True)
         print(f"  Renamed {date_col} → date")
 
     nat_count = features_df_cached["date"].isna().sum()
     if nat_count > 0:
-        print(f"  ⚠ NaT rows: {nat_count}, dropping...")
-    features_df_cached = features_df_cached.dropna(subset=["date"]).copy()
+        print(f"  ⚠ Removing {nat_count} NaT rows...")
+        features_df_cached = features_df_cached.dropna(subset=["date"]).copy()
+
     features_df_cached = features_df_cached.sort_values("date").reset_index(drop=True)
 
     if len(features_df_cached) == 0:
-        raise ValueError("All dates were NaT after conversion!")
+        raise ValueError("All dates were invalid after conversion!")
 
-    print(f"  Date range: {features_df_cached['date'].min()} → {features_df_cached['date'].max()}")
+    print(f"  ✓ Date range: {features_df_cached['date'].min().date()} → {features_df_cached['date'].max().date()}")
 
-    # 4) 동적/고정 예측 윈도우 계산
     last_train_date = pd.to_datetime(features_df_cached["date"]).max()
     app.state.train_end_dt = last_train_date
 
@@ -379,14 +415,14 @@ def load_model():
         app.state.predict_end_dt = last_train_date + pd.Timedelta(days=MAX_FORECAST_DAYS)
         print(f"✓ Predict window (auto): {app.state.predict_start_dt.date()} ~ {app.state.predict_end_dt.date()}")
     else:
-        # 고정 모드: ENV 적용(비어있으면 자동 보정)
         fixed_train_end = pd.to_datetime(TRAIN_END_DATE) if TRAIN_END_DATE else last_train_date
         app.state.train_end_dt = fixed_train_end
-        app.state.predict_start_dt = pd.to_datetime(PREDICT_START_DATE) if PREDICT_START_DATE else fixed_train_end + pd.Timedelta(days=1)
-        app.state.predict_end_dt = pd.to_datetime(PREDICT_END_DATE) if PREDICT_END_DATE else fixed_train_end + pd.Timedelta(days=MAX_FORECAST_DAYS)
+        app.state.predict_start_dt = pd.to_datetime(
+            PREDICT_START_DATE) if PREDICT_START_DATE else fixed_train_end + pd.Timedelta(days=1)
+        app.state.predict_end_dt = pd.to_datetime(
+            PREDICT_END_DATE) if PREDICT_END_DATE else fixed_train_end + pd.Timedelta(days=MAX_FORECAST_DAYS)
         print(f"✓ Predict window (fixed): {app.state.predict_start_dt.date()} ~ {app.state.predict_end_dt.date()}")
 
-    # --- NEW: 오늘까지 창 자동 확장(절대 상한 포함) ---
     try:
         today = pd.Timestamp.today().normalize()
     except Exception:
@@ -398,10 +434,9 @@ def load_model():
         if desired_end > app.state.predict_end_dt:
             old_end = app.state.predict_end_dt
             app.state.predict_end_dt = desired_end
-            print(f"✓ Window extended to today: {old_end.date()} → {app.state.predict_end_dt.date()} "
-                  f"(cap={ABS_MAX_FORECAST_DAYS}d)")
+            print(
+                f"✓ Window extended to today: {old_end.date()} → {app.state.predict_end_dt.date()} (cap={ABS_MAX_FORECAST_DAYS}d)")
 
-    # 5) feature_columns 설정(시그니처 → 아티팩트 → 숫자컬럼 폴백)
     feature_columns_local = _extract_feature_columns_from_signature()
     if not feature_columns_local:
         print("[startup] signature missing, trying artifact feature_names...")
@@ -412,14 +447,15 @@ def load_model():
     feature_columns = feature_columns_local
     print(f"✓ feature_columns: {len(feature_columns)} columns")
 
-    # 6) 히스토리 구성
     target_history_local = reconstruct_target_history(features_df_cached)
     target_history[:] = target_history_local if target_history is not None else target_history_local
     print(f"✓ History reconstructed ({len(target_history)})")
 
+
 # -------------------- SCHEMAS --------------------
 class PredictionRequest(BaseModel):
-    date: str  # YYYY-MM-DD
+    date: str
+
 
 # -------------------- ROUTES --------------------
 @app.get("/")
@@ -438,9 +474,9 @@ def root():
         "abs_max_forecast_days": ABS_MAX_FORECAST_DAYS,
     }
 
+
 @app.post("/predict")
 def predict(request: PredictionRequest):
-    """예측 엔드포인트: 학습 마지막 날짜 이후의 target_date까지 재귀 예측."""
     print("\n" + "=" * 50)
     print(f"REQUEST: {request.date}")
     print("=" * 50)
@@ -454,24 +490,25 @@ def predict(request: PredictionRequest):
         predict_start = getattr(app.state, "predict_start_dt", None)
         predict_end = getattr(app.state, "predict_end_dt", None)
 
-        if last_train_date is None or predict_start is None or predict_end is None:
-            raise RuntimeError("Server not initialized properly. Missing date boundaries.")
+        if None in (last_train_date, predict_start, predict_end):
+            raise RuntimeError(
+                f"Server not initialized properly. "
+                f"last_train={last_train_date}, predict_start={predict_start}, predict_end={predict_end}"
+            )
 
         print(f"Last training date: {last_train_date.date()}")
         print(f"Target date: {target_date.date()}")
+        print(f"Window: {predict_start.date()} ~ {predict_end.date()}")
 
-        # 오늘 & 절대상한 계산
         try:
             today = pd.Timestamp.today().normalize()
         except Exception:
             today = pd.to_datetime("today").normalize()
         hard_limit_end = last_train_date + pd.Timedelta(days=ABS_MAX_FORECAST_DAYS)
 
-        # 시작일 이전은 그대로 차단
         if target_date < predict_start:
             raise ValueError(f"Target date must be on or after {predict_start.date()}")
 
-        # 범위를 넘었지만, 오늘까지 확장 허용이면 창 확장
         if target_date > predict_end:
             if ALLOW_EXTEND_TO_TODAY == "1" and target_date <= today:
                 new_end = min(today, hard_limit_end)
@@ -482,12 +519,10 @@ def predict(request: PredictionRequest):
                     print(f"✓ Extended window for request: {old_end.date()} → {predict_end.date()}")
                 else:
                     raise ValueError(
-                        f"Target date exceeds absolute max horizon ({ABS_MAX_FORECAST_DAYS} days after {last_train_date.date()})"
-                    )
+                        f"Target date exceeds absolute max horizon ({ABS_MAX_FORECAST_DAYS} days after {last_train_date.date()})")
             else:
                 raise ValueError(f"Target date must be on or before {predict_end.date()}")
 
-        # 예측 수평(일)
         days_ahead = int((target_date - last_train_date).days)
         max_horizon = int((predict_end - last_train_date).days)
         print(f"Forecast horizon: {days_ahead} days (max {max_horizon} days)")
@@ -497,23 +532,19 @@ def predict(request: PredictionRequest):
         if days_ahead > max_horizon:
             raise ValueError(f"Forecast horizon ({days_ahead}) exceeds current window ({max_horizon} days)")
 
-        # 재귀 예측
         hist = target_history.copy() if target_history else [50000.0] * 100
         corrections = 0
 
         for i in range(1, days_ahead + 1):
-            # 최신 통계(윈도우 7/30) 갱신
-            win7  = hist[-7:]  if len(hist) >= 7  else hist
+            win7 = hist[-7:] if len(hist) >= 7 else hist
             win30 = hist[-30:] if len(hist) >= 30 else hist
-            recent_mean = float(np.mean(win7))  if win7  else 0.0
-            recent_std  = float(np.std(win7))   if win7  else 0.0
-            guard_std   = max(recent_std, 5.0)  # 하한
-            cap         = _safe_cap(hist)
+            recent_mean = float(np.mean(win7)) if win7 else 0.0
+            recent_std = float(np.std(win7)) if win7 else 0.0
+            guard_std = max(recent_std, 5.0)
+            cap = _safe_cap(hist)
 
-            # (A) 시그니처에 맞는 피처 생성
             feat_row = _build_features_for_step(hist, feature_columns or [])
 
-            # (B) 모델 입력 정렬
             result_dict = {}
             cols = feature_columns or []
             for col in cols:
@@ -523,24 +554,20 @@ def predict(request: PredictionRequest):
                 result_dict[col] = np.float32(val)
             x_input = pd.DataFrame([result_dict]) if cols else pd.DataFrame([{}])
 
-            # (C) 예측 + 강력 보정
             try:
                 yhat = float(model.predict(x_input)[0])
 
-                # 1) 유한·양수 보장
                 if not np.isfinite(yhat) or yhat < 0:
                     corrections += 1
                     yhat = recent_mean
 
-                # 2) 과도한 이탈 보정 (3σ 초과 → 중간값 쪽으로 당김)
                 if abs(yhat - recent_mean) > 3 * guard_std:
                     corrections += 1
                     median30 = float(np.median(win30)) if win30 else recent_mean
                     yhat = 0.5 * yhat + 0.5 * median30
 
-                # 3) 상한 클램프 + 모멘텀 스무딩
                 yhat = float(np.clip(yhat, 0.0, cap))
-                yhat = 0.7 * yhat + 0.3 * hist[-1]  # 급변 완화
+                yhat = 0.7 * yhat + 0.3 * hist[-1]
 
                 hist.append(yhat)
 
@@ -565,18 +592,21 @@ def predict(request: PredictionRequest):
             "last_training_date": str(last_train_date.date()),
             "forecast_horizon_days": days_ahead,
             "corrections": corrections,
-            "prediction_period": f"{getattr(app.state,'predict_start_dt').date()} ~ {getattr(app.state,'predict_end_dt').date()}",
-            "note": ("Window auto-extended to today"
-                     if ALLOW_EXTEND_TO_TODAY == "1" else
-                     ("Prediction within dynamic window" if AUTO_PREDICT_WINDOW == "1" else "Prediction within fixed window"))
+            "prediction_period": f"{getattr(app.state, 'predict_start_dt').date()} ~ {getattr(app.state, 'predict_end_dt').date()}",
+            "note": ("Window auto-extended to today" if ALLOW_EXTEND_TO_TODAY == "1" else
+                     (
+                         "Prediction within dynamic window" if AUTO_PREDICT_WINDOW == "1" else "Prediction within fixed window"))
         }
 
     except ValueError as ve:
+        print(f"[ERROR] ValueError: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        print(f"[ERROR] Unexpected: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 def health():
@@ -600,11 +630,13 @@ def health():
         "max_forecast_days": MAX_FORECAST_DAYS,
         "history_length": len(target_history) if target_history else 0,
         "recent_7day_mean": float(np.mean(target_history[-7:])) if target_history and len(target_history) >= 7 else 0.0,
-        "recent_30day_mean": float(np.mean(target_history[-30:])) if target_history and len(target_history) >= 30 else 0.0,
+        "recent_30day_mean": float(np.mean(target_history[-30:])) if target_history and len(
+            target_history) >= 30 else 0.0,
         "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env",
         "auto_extend_to_today": ALLOW_EXTEND_TO_TODAY == "1",
         "abs_max_forecast_days": ABS_MAX_FORECAST_DAYS,
     }
+
 
 @app.get("/info")
 def info():

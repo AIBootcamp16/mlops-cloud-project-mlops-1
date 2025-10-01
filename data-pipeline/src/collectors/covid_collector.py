@@ -246,30 +246,23 @@ class CovidDataCollector:
         """CSV/메타데이터를 MLflow 아티팩트로 저장"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_filename = f"korea_covid_raw_{timestamp}.csv"
-        meta_filename = f"metadata_{timestamp}.json"
 
         tmp_dir = tempfile.gettempdir()
         csv_path = os.path.join(tmp_dir, csv_filename)
-        meta_path = os.path.join(tmp_dir, meta_filename)
 
         # CSV 저장
         df.to_csv(csv_path, index=False)
-        mlflow.log_artifact(csv_path, artifact_path=self.config.mlflow.ARTIFACT_PATH)
 
-        # 메타데이터
-        metadata = create_data_metadata(
-            data=df,
-            collection_info={
-                "source_url": self.config.data.OWID_URL,
-                "target_country": self.config.data.TARGET_COUNTRY,
-                "train_start": self.config.data.TRAIN_START_DATE,
-                "train_end": self.config.data.get_train_end_date(),
-                "data_source": df.get("data_source", pd.Series(["UNKNOWN"])).iloc[0],
-            },
-        )
+        # ✅ 고정된 경로로 저장 (raw_data 대신 data 사용)
+        mlflow.log_artifact(csv_path, artifact_path="data")  # 변경
+
+        # 메타데이터도 동일하게
+        metadata = create_data_metadata(...)
+        meta_path = os.path.join(tmp_dir, f"metadata_{timestamp}.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
-        mlflow.log_artifact(meta_path, artifact_path=f"{self.config.mlflow.ARTIFACT_PATH}/metadata")
+
+        mlflow.log_artifact(meta_path, artifact_path="data/metadata")  # 변경
 
         # 정리
         try:
@@ -279,8 +272,8 @@ class CovidDataCollector:
             pass
 
         print("[mlflow] logged artifacts:")
-        print(f"  - {self.config.mlflow.ARTIFACT_PATH}/{csv_filename}")
-        print(f"  - {self.config.mlflow.ARTIFACT_PATH}/metadata/{meta_filename}")
+        print(f"  - data/{csv_filename}")  # 변경
+        print(f"  - data/metadata/metadata_{timestamp}.json")  # 변경
 
     def collect_raw_data(self, run_name: Optional[str] = None) -> pd.DataFrame:
         """OWID → 한국 데이터 수집(원본 보존 권장), MLflow 로깅 포함"""
