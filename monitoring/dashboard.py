@@ -211,32 +211,31 @@ col1, col2, col3, col4 = st.columns(4)
 
 runs = get_latest_metrics(experiment_name)
 
-if runs:
-    latest_run = runs[0]
-    metrics = latest_run.data.metrics
+if not runs.empty:
+    latest_run = runs.iloc[0]
 
+    # ✅ DataFrame 컬럼에서 직접 메트릭 가져오기
     with col1:
-        # ✅ 여러 메트릭 이름 지원
-        mae = (metrics.get('test_MAE') or
-               metrics.get('best_model_test_mae') or
-               metrics.get('random_forest_test_mae') or 0)
+        mae = (latest_run.get('metrics.test_MAE') or
+               latest_run.get('metrics.best_model_test_mae') or
+               latest_run.get('metrics.random_forest_test_mae') or 0)
         st.metric("MAE", f"{mae:.2f}")
 
     with col2:
-        rmse = (metrics.get('test_RMSE') or
-                metrics.get('best_model_test_rmse') or
-                metrics.get('random_forest_test_rmse') or 0)
+        rmse = (latest_run.get('metrics.test_RMSE') or
+                latest_run.get('metrics.best_model_test_rmse') or
+                latest_run.get('metrics.random_forest_test_rmse') or 0)
         st.metric("RMSE", f"{rmse:.2f}")
 
     with col3:
-        mape = (metrics.get('test_MAPE') or
-                metrics.get('best_model_test_mape') or 0)
+        mape = (latest_run.get('metrics.test_MAPE') or
+                latest_run.get('metrics.best_model_test_mape') or 0)
         st.metric("MAPE", f"{mape:.2f}%")
 
     with col4:
-        r2 = (metrics.get('test_R2') or
-              metrics.get('best_model_test_r2') or
-              metrics.get('random_forest_test_r2') or 0)
+        r2 = (latest_run.get('metrics.test_R2') or
+              latest_run.get('metrics.best_model_test_r2') or
+              latest_run.get('metrics.random_forest_test_r2') or 0)
         st.metric("R²", f"{r2:.4f}")
 else:
     st.warning(f"Experiment '{experiment_name}'에서 실행 기록을 찾을 수 없습니다.")
@@ -245,52 +244,46 @@ else:
 # ==================== 2. 성능 변화 추적 ====================
 st.header("2. 📉 성능 변화 추이")
 
-if runs:
+if not runs.empty:
     metric_history = []
-    for run in runs:
-        metrics = run.data.metrics
+    for _, run in runs.iterrows():
+        # ✅ start_time이 이미 Timestamp 객체인 경우 처리
+        try:
+            if isinstance(run['start_time'], pd.Timestamp):
+                timestamp = run['start_time'].to_pydatetime()
+            else:
+                timestamp = datetime.fromtimestamp(run['start_time'] / 1000)
+        except Exception:
+            timestamp = datetime.now()
+
         metric_history.append({
-            'timestamp': datetime.fromtimestamp(run.info.start_time / 1000),
-            'run_id': run.info.run_id[:8],
-            'MAE': (metrics.get('test_MAE') or
-                    metrics.get('best_model_test_mae') or
-                    metrics.get('random_forest_test_mae')),
-            'RMSE': (metrics.get('test_RMSE') or
-                     metrics.get('best_model_test_rmse') or
-                     metrics.get('random_forest_test_rmse')),
-            'R2': (metrics.get('test_R2') or
-                   metrics.get('best_model_test_r2') or
-                   metrics.get('random_forest_test_r2'))
+            'timestamp': timestamp,
+            'run_id': run['run_id'][:8] if isinstance(run['run_id'], str) else str(run['run_id'])[:8],
+            'MAE': (run.get('metrics.test_MAE') or
+                    run.get('metrics.best_model_test_mae') or
+                    run.get('metrics.random_forest_test_mae')),
+            'RMSE': (run.get('metrics.test_RMSE') or
+                     run.get('metrics.best_model_test_rmse') or
+                     run.get('metrics.random_forest_test_rmse')),
+            'R2': (run.get('metrics.test_R2') or
+                   run.get('metrics.best_model_test_r2') or
+                   run.get('metrics.random_forest_test_r2'))
         })
 
     df_metrics = pd.DataFrame(metric_history)
-    # None 값 제거
     df_metrics = df_metrics.dropna(subset=['MAE', 'R2'])
 
     if not df_metrics.empty and len(df_metrics) > 1:
         col1, col2 = st.columns(2)
 
         with col1:
-            fig_mae = px.line(
-                df_metrics,
-                x='timestamp',
-                y='MAE',
-                title='MAE 변화 추이',
-                markers=True,
-                hover_data=['run_id']
-            )
+            fig_mae = px.line(df_metrics, x='timestamp', y='MAE', title='MAE 변화 추이', markers=True,
+                              hover_data=['run_id'])
             fig_mae.update_layout(xaxis_title='시간', yaxis_title='MAE')
             st.plotly_chart(fig_mae, use_container_width=True)
 
         with col2:
-            fig_r2 = px.line(
-                df_metrics,
-                x='timestamp',
-                y='R2',
-                title='R² 변화 추이',
-                markers=True,
-                hover_data=['run_id']
-            )
+            fig_r2 = px.line(df_metrics, x='timestamp', y='R2', title='R² 변화 추이', markers=True, hover_data=['run_id'])
             fig_r2.update_layout(xaxis_title='시간', yaxis_title='R²')
             st.plotly_chart(fig_r2, use_container_width=True)
     else:
@@ -396,14 +389,23 @@ with col1:
         st.error("❌ MLflow 연결 실패")
 
 with col2:
-    if runs:
-        last_run_time = datetime.fromtimestamp(runs[0].info.start_time / 1000)
-        hours_ago = (datetime.now() - last_run_time).total_seconds() / 3600
+    if not runs.empty:
+        # ✅ start_time 타입 체크
+        try:
+            start_time = runs.iloc[0]['start_time']
+            if isinstance(start_time, pd.Timestamp):
+                last_run_time = start_time.to_pydatetime()
+            else:
+                last_run_time = datetime.fromtimestamp(start_time / 1000)
 
-        if hours_ago < 24:
-            st.success(f"🕐 마지막 실행: {hours_ago:.1f}시간 전")
-        else:
-            st.warning(f"⚠️ 마지막 실행: {hours_ago / 24:.1f}일 전")
+            hours_ago = (datetime.now() - last_run_time).total_seconds() / 3600
+
+            if hours_ago < 24:
+                st.success(f"🕐 마지막 실행: {hours_ago:.1f}시간 전")
+            else:
+                st.warning(f"⚠️ 마지막 실행: {hours_ago / 24:.1f}일 전")
+        except Exception as e:
+            st.info("⚠️ 실행 시간 확인 실패")
     else:
         st.info("⚠️ 실행 기록 없음")
 
