@@ -193,12 +193,17 @@ def main():
         print("[fe] Processed data not found, creating dummy data...")
         processed = create_dummy_processed_data()
 
-    # 🔥 최근 N일로 자르기
-    try:
-        processed = _slice_last_n_days(processed, args.train_window_days, "date")
-        print(f"[fe] Sliced to last {args.train_window_days}d: {processed['date'].min()} ~ {processed['date'].max()}  -> {len(processed)} rows")
-    except Exception as e:
-        print(f"[fe] slice warning: {e}")
+    # ✅ 슬라이싱: 기본적으로 전체 데이터 사용
+    if args.train_window_days:
+        try:
+            processed = _slice_last_n_days(processed, args.train_window_days, "date")
+            print(f"[fe] Sliced to last {args.train_window_days}d: {len(processed)} rows")
+        except Exception as e:
+            print(f"[fe] slice warning: {e}, using all data")
+    else:
+        print(f"[fe] Using all available data: {len(processed)} rows")
+        if 'date' in processed.columns:
+            print(f"[fe] Date range: {processed['date'].min()} ~ {processed['date'].max()}")
 
     # 타겟 컬럼 확인
     if args.target not in processed.columns:

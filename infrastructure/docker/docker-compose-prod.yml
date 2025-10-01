@@ -2,9 +2,7 @@ version: "3.9"
 
 services:
   mlflow:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.mlflow
+    image: hyuk12/mlflow:v1
     env_file: .env
     ports:
       - "5000:5000"
@@ -26,9 +24,7 @@ services:
       - mlflow-artifacts:/app/artifacts
 
   covid-analysis:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.analysis
+    image: hyuk12/covid-analysis:v4
     working_dir: /workspace
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
@@ -43,9 +39,7 @@ services:
       - ../../models:/workspace/models
 
   airflow:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.airflow
+    image: hyuk12/airflow:v1
     env_file: .env
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
@@ -75,9 +69,7 @@ services:
       - airflow-logs:/opt/airflow/logs
 
   monitoring-dashboard:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.monitoring
+    image: hyuk12/monitoring:v1
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - FASTAPI_URL=http://fastapi:8000
@@ -101,9 +93,7 @@ services:
     command: streamlit run /app/monitoring/dashboard.py --server.port=8501 --server.address=0.0.0.0
 
   fastapi:
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/Dockerfile.fastapi
+    image: hyuk12/fastapi:v1
     env_file: .env
     dns:
       - 8.8.8.8

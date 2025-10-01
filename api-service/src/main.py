@@ -31,11 +31,15 @@ MAX_FORECAST_DAYS = int(os.getenv("MAX_FORECAST_DAYS", "30"))
 FEATURES_S3_PREFIX = os.getenv("FEATURES_S3_PREFIX", "").strip()
 FEATURES_LOCAL_PATH = os.getenv("FEATURES_LOCAL_PATH", "/workspace/data/features/latest_features.csv").strip()
 
+# --- NEW: 오늘까지 창 자동 확장 옵션 & 절대 상한 ---
+ALLOW_EXTEND_TO_TODAY = os.getenv("ALLOW_EXTEND_TO_TODAY", "1").strip()
+ABS_MAX_FORECAST_DAYS = int(os.getenv("ABS_MAX_FORECAST_DAYS", "365"))
+
 # 모델/피처 공유 상태
 model = None
-feature_columns: Optional[List[str]] = None
+feature_columns: list[str] = []
 features_df_cached: Optional[pd.DataFrame] = None
-target_history: Optional[List[float]] = None
+target_history: list[float] = []
 
 # 피처 구성 기본 스펙
 LOOKBACKS = [1, 3, 7, 14]
@@ -382,18 +386,35 @@ def load_model():
         app.state.predict_end_dt = pd.to_datetime(PREDICT_END_DATE) if PREDICT_END_DATE else fixed_train_end + pd.Timedelta(days=MAX_FORECAST_DAYS)
         print(f"✓ Predict window (fixed): {app.state.predict_start_dt.date()} ~ {app.state.predict_end_dt.date()}")
 
+    # --- NEW: 오늘까지 창 자동 확장(절대 상한 포함) ---
+    try:
+        today = pd.Timestamp.today().normalize()
+    except Exception:
+        today = pd.to_datetime("today").normalize()
+
+    if ALLOW_EXTEND_TO_TODAY == "1":
+        hard_limit_end = app.state.train_end_dt + pd.Timedelta(days=ABS_MAX_FORECAST_DAYS)
+        desired_end = min(today, hard_limit_end)
+        if desired_end > app.state.predict_end_dt:
+            old_end = app.state.predict_end_dt
+            app.state.predict_end_dt = desired_end
+            print(f"✓ Window extended to today: {old_end.date()} → {app.state.predict_end_dt.date()} "
+                  f"(cap={ABS_MAX_FORECAST_DAYS}d)")
+
     # 5) feature_columns 설정(시그니처 → 아티팩트 → 숫자컬럼 폴백)
-    feature_columns = _extract_feature_columns_from_signature()
-    if not feature_columns:
+    feature_columns_local = _extract_feature_columns_from_signature()
+    if not feature_columns_local:
         print("[startup] signature missing, trying artifact feature_names...")
-        feature_columns = _try_load_feature_names_from_artifacts()
-    if not feature_columns:
+        feature_columns_local = _try_load_feature_names_from_artifacts()
+    if not feature_columns_local:
         numeric_cols = [c for c in features_df_cached.columns if pd.api.types.is_numeric_dtype(features_df_cached[c])]
-        feature_columns = [c for c in numeric_cols if c not in {TARGET, "date", "y_next"}]
+        feature_columns_local = [c for c in numeric_cols if c not in {TARGET, "date", "y_next"}]
+    feature_columns = feature_columns_local
     print(f"✓ feature_columns: {len(feature_columns)} columns")
 
     # 6) 히스토리 구성
-    target_history = reconstruct_target_history(features_df_cached)
+    target_history_local = reconstruct_target_history(features_df_cached)
+    target_history[:] = target_history_local if target_history is not None else target_history_local
     print(f"✓ History reconstructed ({len(target_history)})")
 
 # -------------------- SCHEMAS --------------------
@@ -412,7 +433,9 @@ def root():
         "training_period": f"~{(train_end.date() if train_end is not None else TRAIN_END_DATE or 'auto')}",
         "prediction_period": f"{(p_start.date() if p_start is not None else (PREDICT_START_DATE or 'auto'))} ~ {(p_end.date() if p_end is not None else (PREDICT_END_DATE or 'auto'))}",
         "max_forecast_days": MAX_FORECAST_DAYS,
-        "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env"
+        "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env",
+        "auto_extend_to_today": ALLOW_EXTEND_TO_TODAY == "1",
+        "abs_max_forecast_days": ABS_MAX_FORECAST_DAYS,
     }
 
 @app.post("/predict")
@@ -423,7 +446,7 @@ def predict(request: PredictionRequest):
     print("=" * 50)
 
     try:
-        target_date = pd.to_datetime(request.date)
+        target_date = pd.to_datetime(request.date).normalize()
         if pd.isna(target_date):
             raise ValueError("Invalid date format. Use YYYY-MM-DD")
 
@@ -437,20 +460,42 @@ def predict(request: PredictionRequest):
         print(f"Last training date: {last_train_date.date()}")
         print(f"Target date: {target_date.date()}")
 
-        # 유효 구간 검증
+        # 오늘 & 절대상한 계산
+        try:
+            today = pd.Timestamp.today().normalize()
+        except Exception:
+            today = pd.to_datetime("today").normalize()
+        hard_limit_end = last_train_date + pd.Timedelta(days=ABS_MAX_FORECAST_DAYS)
+
+        # 시작일 이전은 그대로 차단
         if target_date < predict_start:
             raise ValueError(f"Target date must be on or after {predict_start.date()}")
+
+        # 범위를 넘었지만, 오늘까지 확장 허용이면 창 확장
         if target_date > predict_end:
-            raise ValueError(f"Target date must be on or before {predict_end.date()}")
+            if ALLOW_EXTEND_TO_TODAY == "1" and target_date <= today:
+                new_end = min(today, hard_limit_end)
+                if target_date <= new_end:
+                    old_end = predict_end
+                    app.state.predict_end_dt = new_end
+                    predict_end = new_end
+                    print(f"✓ Extended window for request: {old_end.date()} → {predict_end.date()}")
+                else:
+                    raise ValueError(
+                        f"Target date exceeds absolute max horizon ({ABS_MAX_FORECAST_DAYS} days after {last_train_date.date()})"
+                    )
+            else:
+                raise ValueError(f"Target date must be on or before {predict_end.date()}")
 
         # 예측 수평(일)
         days_ahead = int((target_date - last_train_date).days)
-        print(f"Forecast horizon: {days_ahead} days")
+        max_horizon = int((predict_end - last_train_date).days)
+        print(f"Forecast horizon: {days_ahead} days (max {max_horizon} days)")
 
         if days_ahead <= 0:
             raise ValueError(f"Target must be after {last_train_date.date()}")
-        if days_ahead > MAX_FORECAST_DAYS:
-            raise ValueError(f"Forecast horizon ({days_ahead}) exceeds maximum ({MAX_FORECAST_DAYS} days)")
+        if days_ahead > max_horizon:
+            raise ValueError(f"Forecast horizon ({days_ahead}) exceeds current window ({max_horizon} days)")
 
         # 재귀 예측
         hist = target_history.copy() if target_history else [50000.0] * 100
@@ -521,7 +566,9 @@ def predict(request: PredictionRequest):
             "forecast_horizon_days": days_ahead,
             "corrections": corrections,
             "prediction_period": f"{getattr(app.state,'predict_start_dt').date()} ~ {getattr(app.state,'predict_end_dt').date()}",
-            "note": "Prediction within dynamic window" if AUTO_PREDICT_WINDOW == "1" else "Prediction within fixed window"
+            "note": ("Window auto-extended to today"
+                     if ALLOW_EXTEND_TO_TODAY == "1" else
+                     ("Prediction within dynamic window" if AUTO_PREDICT_WINDOW == "1" else "Prediction within fixed window"))
         }
 
     except ValueError as ve:
@@ -554,7 +601,9 @@ def health():
         "history_length": len(target_history) if target_history else 0,
         "recent_7day_mean": float(np.mean(target_history[-7:])) if target_history and len(target_history) >= 7 else 0.0,
         "recent_30day_mean": float(np.mean(target_history[-30:])) if target_history and len(target_history) >= 30 else 0.0,
-        "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env"
+        "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env",
+        "auto_extend_to_today": ALLOW_EXTEND_TO_TODAY == "1",
+        "abs_max_forecast_days": ABS_MAX_FORECAST_DAYS,
     }
 
 @app.get("/info")
@@ -573,15 +622,17 @@ def info():
         "prediction_period": {
             "start": str(p_start.date() if p_start is not None else (PREDICT_START_DATE or "auto")),
             "end": str(p_end.date() if p_end is not None else (PREDICT_END_DATE or "auto")),
-            "description": "From the day after the last training date up to MAX_FORECAST_DAYS"
+            "description": "From the day after the last training date up to MAX_FORECAST_DAYS (auto-extended to today if enabled)"
         },
         "constraints": {
             "max_forecast_horizon": f"{MAX_FORECAST_DAYS} days",
-            "reason": "To maintain accuracy for short-term forecasts"
+            "absolute_cap_days": ABS_MAX_FORECAST_DAYS,
+            "reason": "To maintain accuracy for short- to mid-term forecasts"
         },
         "usage": {
             "example": f"POST /predict {{\"date\": \"{(p_start.date() if p_start is not None else 'YYYY-MM-DD')}\"}}",
             "valid_range": f"{(p_start.date() if p_start is not None else (PREDICT_START_DATE or 'auto'))} ~ {(p_end.date() if p_end is not None else (PREDICT_END_DATE or 'auto'))}"
         },
-        "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env"
+        "mode": "auto" if AUTO_PREDICT_WINDOW == "1" else "fixed-env",
+        "auto_extend_to_today": ALLOW_EXTEND_TO_TODAY == "1"
     }

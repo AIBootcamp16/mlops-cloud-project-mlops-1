@@ -1,65 +1,63 @@
-
-# src/pipeline/tasks/preprocess.py
+# data-pipeline/src/pipeline/preprocess.py
 # -*- coding: utf-8 -*-
 """
-Preprocessing task.
-Loads the latest collection output from MLflow and produces processed dataset,
-either via MLflowCovidPipeline or direct data_preprocessor module.
+Preprocessing task with enhanced error handling and validation
 """
-import os, sys, argparse
+import os
+import sys
+import argparse
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-name", type=str, default="preprocessing")
-    ap.add_argument("--from-latest", action="store_true", help="Use latest collection run from MLflow")
+    ap.add_argument("--from-latest", action="store_true")
     ap.add_argument("--tracking-uri", type=str, default=None)
     args = ap.parse_args()
 
-    # Prefer MLflowCovidPipeline convenience
-    try:
-        from src.pipeline.mlflow_pipeline import MLflowCovidPipeline
-        pipeline = MLflowCovidPipeline(tracking_uri=args.tracking_uri)
-        if args.from_latest and hasattr(pipeline, "run_preprocessing_from_latest_collection"):
-            # 메서드가 어떤 키워드를 받는지 감지해서 호출
-            import inspect
-            sig = inspect.signature(pipeline.run_preprocessing_from_latest_collection)
-            if "run_name" in sig.parameters:
-                processed = pipeline.run_preprocessing_from_latest_collection(run_name = args.run_name, from_latest = args.from_latest)
-            elif "preprocessing_run_name" in sig.parameters:
-                processed = pipeline.run_preprocessing_from_latest_collection(
-                preprocessing_run_name = args.run_name, from_latest = args.from_latest)
-            else:
-                raise TypeError("run_preprocessing_from_latest_collection signature not recognized")
-        elif hasattr(pipeline, "run_preprocessing"):
-            import inspect
-            sig = inspect.signature(pipeline.run_full_pipeline)
-            if "run_name" in sig.parameters:
-                processed = pipeline.run_full_pipeline(run_name=args.run_name)
-            elif "preprocessing_run_name" in sig.parameters:
-                processed = pipeline.run_full_pipeline(preprocessing_run_name=args.run_name)
-            else:
-                processed = pipeline.run_full_pipeline()
-        elif hasattr(pipeline, "run_full_pipeline"):
-            processed = pipeline.run_full_pipeline(run_name=args.run_name)
-        else:
-            raise AttributeError("Suitable preprocessing method not found in MLflowCovidPipeline")
-        print("[preprocess] done.")
-        return
-    except Exception as e:
-        print(f"[preprocess] MLflowCovidPipeline path failed: {e}. Fallback to data_preprocessor.")
+    print("=" * 60)
+    print("PREPROCESSING TASK START")
+    print("=" * 60)
+    print(f"Run name: {args.run_name}")
+    print(f"From latest: {args.from_latest}")
+    print(f"Tracking URI: {args.tracking_uri or 'default'}")
+    print("=" * 60)
 
-    # Fallback direct module
     try:
         from src.data_processing.data_preprocessor import CovidDataPreprocessor
         pre = CovidDataPreprocessor(tracking_uri=args.tracking_uri)
-        pre.run(run_name=args.run_name, from_latest=args.from_latest)
-        print("[preprocess] done via CovidDataPreprocessor.")
-    except Exception as e2:
-        raise RuntimeError(f"Preprocessing failed in both methods: {e2}")
+
+        result = pre.run(
+            run_name=args.run_name,
+            from_latest=args.from_latest
+        )
+
+        print("\n" + "=" * 60)
+        print("✅ PREPROCESSING SUCCESS")
+        print("=" * 60)
+        print(f"Output shape: {result.shape if result is not None else 'N/A'}")
+
+        if result is not None and 'date' in result.columns:
+            print(f"Date range: {result['date'].min().date()} ~ {result['date'].max().date()}")
+
+        print("=" * 60)
+
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("❌ PREPROCESSING FAILED")
+        print("=" * 60)
+        print(f"Error: {e}")
+
+        import traceback
+        traceback.print_exc()
+
+        print("=" * 60)
+        raise
+
 
 if __name__ == "__main__":
     main()

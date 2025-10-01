@@ -174,42 +174,64 @@ def load_features(feature_path: str | None, model_name: str, model_version: int)
 # Prediction
 # -----------------------------
 def make_predictions(model, df: pd.DataFrame, horizon: int = 30, target: str = "new_cases"):
-    """예측 함수"""
-    logger.info(f"[predict] Predicting next {horizon} days")
+    """✅ 수정: 실시간 예측 - 데이터 마지막 날부터 예측"""
+    logger.info(f"[predict] Predicting next {horizon} days from latest data")
 
-    # 입력 피처 집합(타겟, 날짜, 명백한 미래열 제외)
+    # ✅ 'date' 컬럼 확인 및 정렬
+    if 'date' not in df.columns:
+        # 인덱스가 날짜인지 확인
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+            df.rename(columns={'index': 'date'}, inplace=True)
+        else:
+            raise ValueError("[predict] 'date' column not found and index is not DatetimeIndex")
+
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').reset_index(drop=True)
+
+    # 입력 피처 집합
     ignore_cols = {target, "date", "y_next"}
     feature_cols = [c for c in df.columns if c not in ignore_cols and pd.api.types.is_numeric_dtype(df[c])]
 
     if not feature_cols:
-        raise ValueError("[predict] No numeric feature columns available for prediction.")
+        raise ValueError("[predict] No numeric feature columns available")
 
-    last = df.iloc[-1]  # 마지막 관측
-    # ⭐ DataFrame으로 유지 (컬럼명 보존)
+    # ✅ 마지막 관측 데이터
+    last = df.iloc[-1]
+    last_date = last["date"]
+
+    logger.info(f"[predict] Last training date: {last_date.date()}")
+    logger.info(f"[predict] Prediction start: {(last_date + pd.Timedelta(days=1)).date()}")
+    logger.info(f"[predict] Prediction end: {(last_date + pd.Timedelta(days=horizon)).date()}")
+
     X = last[feature_cols].to_frame().T
 
     preds, dates = [], []
-    start_date = last["date"] if "date" in df.columns else datetime.utcnow()
 
-    # mlflow.pyfunc 모델/ sklearn 모델 호환 처리
     def _predict_one(x_df):
         try:
             return float(model.predict(x_df)[0])
         except AttributeError:
             return float(model.predict(x_df).iloc[0])
 
+    # ✅ 예측 시작: 마지막 날 다음날부터
     for i in range(1, horizon + 1):
         pred = _predict_one(X)
-        preds.append(pred)
-        dates.append(start_date + pd.Timedelta(days=i))
+        pred_date = last_date + pd.Timedelta(days=i)
 
-    result = pd.DataFrame(
-        {
-            "date": dates,
-            "predicted_new_cases": preds,
-            "prediction_timestamp": datetime.now(),
-        }
-    )
+        preds.append(max(0, pred))  # 음수 예측 방지
+        dates.append(pred_date)
+
+    result = pd.DataFrame({
+        "date": dates,
+        "predicted_new_cases": preds,
+        "prediction_timestamp": datetime.now(),
+        "last_train_date": last_date,  # ✅ 학습 데이터 마지막 날 기록
+    })
+
+    logger.info(f"[predict] Generated {len(result)} predictions")
+    logger.info(f"[predict] Date range: {result['date'].min().date()} ~ {result['date'].max().date()}")
+
     return result
 
 
