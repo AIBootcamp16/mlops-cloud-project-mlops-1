@@ -183,6 +183,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required secrets (existence only)
+        shell: bash
+        run: |
+          check() { [ -n "$1" ] || { echo "❌ Missing secret: $2"; exit 1; }; }
+          check "${{ secrets.SSH_HOST }}"        "SSH_HOST"
+          check "${{ secrets.SSH_USER }}"        "SSH_USER"
+          check "${{ secrets.SSH_KEY }}"         "SSH_KEY"
+          check "${{ secrets.REMOTE_APP_DIR }}"  "REMOTE_APP_DIR"
+          echo "✅ required secrets present"
+      
       - name: Create .env from Secrets
         run: |
           cat > .env << 'EOF'
