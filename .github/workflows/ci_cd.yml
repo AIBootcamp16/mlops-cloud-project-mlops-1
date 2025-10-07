@@ -210,6 +210,19 @@ jobs:
           TRAIN_END_DATE=
           PREDICT_START_DATE=
           EOF
+       # ← SSH 개인키를 파일로 저장(개행 보존), 권한 600
+      - name: Write SSH key to file
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      # (선택) known_hosts 등록 – 보안/속도 향상
+      - name: Add host to known_hosts
+        shell: bash
+        run: |
+          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true    
 
       - name: Upload compose & env to server
         uses: appleboy/scp-action@v0.1.7
