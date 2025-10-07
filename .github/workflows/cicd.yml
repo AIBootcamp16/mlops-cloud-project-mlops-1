@@ -9,7 +9,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_TAG: ${{ secrets.IMAGE_TAG || github.sha }}
+  # 오너/리포지토리 소문자 강제 (핵심 수정)
+  OWNER_LC: ${{ toLower(github.repository_owner) }}
+  REPO_LC:  ${{ toLower(github.event.repository.name) }}
 
 jobs:
   # -------------------- CI (Lint + Test + (옵션) Docker Build Check) --------------------
@@ -103,6 +105,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # IMAGE_TAG: secrets.IMAGE_TAG 가 비어있으면 github.sha 사용
+      - name: Resolve IMAGE_TAG
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.IMAGE_TAG }}" ]; then
+            echo "IMAGE_TAG=${{ secrets.IMAGE_TAG }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=${GITHUB_SHA}" >> $GITHUB_ENV
+          fi
+          echo "Resolved IMAGE_TAG=${IMAGE_TAG:-unset}"
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -113,13 +126,14 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
+      # ---- 모든 태그에서 오너/리포지토리를 소문자 사용 (핵심 수정) ----
       - name: Build & Push - mlflow
         uses: docker/build-push-action@v6
         with:
           context: .
           file: infrastructure/docker/Dockerfile.mlflow
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-mlflow:${{ env.IMAGE_TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-mlflow:${{ env.IMAGE_TAG }}
 
       - name: Build & Push - analysis
         uses: docker/build-push-action@v6
@@ -127,7 +141,7 @@ jobs:
           context: .
           file: infrastructure/docker/Dockerfile.analysis
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-analysis:${{ env.IMAGE_TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-analysis:${{ env.IMAGE_TAG }}
 
       - name: Build & Push - airflow
         uses: docker/build-push-action@v6
@@ -135,7 +149,7 @@ jobs:
           context: .
           file: infrastructure/docker/Dockerfile.airflow
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-airflow:${{ env.IMAGE_TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-airflow:${{ env.IMAGE_TAG }}
 
       - name: Build & Push - api
         uses: docker/build-push-action@v6
@@ -143,7 +157,7 @@ jobs:
           context: .
           file: infrastructure/docker/Dockerfile.fastapi
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-api:${{ env.IMAGE_TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-api:${{ env.IMAGE_TAG }}
 
       - name: Build & Push - monitoring
         uses: docker/build-push-action@v6
@@ -151,7 +165,7 @@ jobs:
           context: .
           file: infrastructure/docker/Dockerfile.monitoring
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-monitoring:${{ env.IMAGE_TAG }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-monitoring:${{ env.IMAGE_TAG }}
 
   # -------------------- Deploy (Compose on remote) --------------------
   deploy:
