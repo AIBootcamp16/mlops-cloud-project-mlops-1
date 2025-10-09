@@ -86,7 +86,7 @@ jobs:
         with:
           context: .
           file: infrastructure/docker/Dockerfile.fastapi
-        push: false
+          push: false
 
       - name: Build check - monitoring
         uses: docker/build-push-action@v6
