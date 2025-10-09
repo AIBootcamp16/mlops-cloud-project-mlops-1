@@ -2,10 +2,10 @@ name: CI/CD
 
 on:
   pull_request:
-    branches: ["main"]             # PR에는 CI만 수행
+    branches: ["main"]                # PR에서는 CI만 수행
   push:
-    branches: ["main"]             # main push 시 CI -> Build&Push -> Deploy
-  workflow_dispatch:               # 수동 실행 시에도 배포 가능
+    branches: ["main"]                # main push 시 CI -> Build&Push -> Deploy
+  workflow_dispatch:                  # 수동 실행도 배포 허용
 
 env:
   REGISTRY: ghcr.io
@@ -106,7 +106,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # IMAGE_TAG: secrets.IMAGE_TAG 없으면 GITHUB_SHA 사용
       - id: resolve_tag
         name: Resolve IMAGE_TAG
         shell: bash
@@ -189,15 +188,17 @@ jobs:
   deploy:
     name: Deploy to Server
     needs: build-and-push
-    # main으로의 push 또는 수동 실행 시 배포
+    # main push 또는 수동 실행에서 배포 수행
     if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
     env:
-      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-      OWNER_LC:  ${{ needs.build-and-push.outputs.owner_lc }}
-      REPO_LC:   ${{ needs.build-and-push.outputs.repo_lc }}
+      IMAGE_TAG:  ${{ needs.build-and-push.outputs.image_tag }}
+      OWNER_LC:   ${{ needs.build-and-push.outputs.owner_lc }}
+      REPO_LC:    ${{ needs.build-and-push.outputs.repo_lc }}
       DEPLOY_SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+      DEPLOY_SSH_USER: ${{ secrets.SSH_USER || vars.SSH_USER || 'ubuntu' }}
+      DEPLOY_REMOTE_APP_DIR: ${{ secrets.REMOTE_APP_DIR || vars.REMOTE_APP_DIR || '/srv/covid-mlops' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -207,16 +208,21 @@ jobs:
           echo "event_name=${{ github.event_name }}"
           echo "ref=${{ github.ref }}"
           echo "IMAGE_TAG=${IMAGE_TAG}"
+          echo "DEPLOY_SSH_USER=${DEPLOY_SSH_USER}"
+          echo "DEPLOY_SSH_PORT=${DEPLOY_SSH_PORT}"
+          echo "DEPLOY_REMOTE_APP_DIR=${DEPLOY_REMOTE_APP_DIR}"
 
-      - name: Validate required secrets (existence only)
+      - name: Validate required secrets/vars (existence)
         shell: bash
         run: |
-          check() { [ -n "$1" ] || { echo "❌ Missing secret: $2"; exit 1; }; }
-          check "${{ secrets.SSH_HOST }}"        "SSH_HOST"
-          check "${{ secrets.SSH_USER }}"        "SSH_USER"
-          check "${{ secrets.SSH_KEY }}"         "SSH_KEY"
-          check "${{ secrets.REMOTE_APP_DIR }}"  "REMOTE_APP_DIR"
-          echo "✅ required secrets present"
+          check() { [ -n "$1" ] || { echo "❌ Missing: $2"; exit 1; }; }
+          # 반드시 secret로 관리(대체 불가)
+          check "${{ secrets.SSH_HOST }}" "SSH_HOST (secret)"
+          check "${{ secrets.SSH_KEY }}"  "SSH_KEY (secret)"
+          # user/dir/port는 secrets/vars/기본값 허용
+          echo "ℹ️ Using SSH_USER=${{ env.DEPLOY_SSH_USER }}"
+          echo "ℹ️ Using REMOTE_APP_DIR=${{ env.DEPLOY_REMOTE_APP_DIR }}"
+          echo "ℹ️ Using SSH_PORT=${{ env.DEPLOY_SSH_PORT }}"
 
       - name: Create .env from Secrets
         run: |
@@ -258,28 +264,39 @@ jobs:
         run: |
           ssh-keyscan -p "${DEPLOY_SSH_PORT}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Ensure remote dir exists
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ env.DEPLOY_SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ env.DEPLOY_SSH_PORT }}
+          script: |
+            mkdir -p "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            echo "[ok] created or exists: ${{ env.DEPLOY_REMOTE_APP_DIR }}"
+
       - name: Upload compose & env to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
+          username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
           source: |
             infrastructure/docker/docker-compose-prod.yml
             .env
-          target: ${{ secrets.REMOTE_APP_DIR }}
+          target: ${{ env.DEPLOY_REMOTE_APP_DIR }}
 
       - name: Compose pull & up on server
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
+          username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
           script: |
             set -e
-            cd ${{ secrets.REMOTE_APP_DIR }}
+            cd "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             export IMAGE_TAG="${{ env.IMAGE_TAG }}"
             echo "Using IMAGE_TAG=${IMAGE_TAG}"
             docker compose -f infrastructure/docker/docker-compose-prod.yml pull
