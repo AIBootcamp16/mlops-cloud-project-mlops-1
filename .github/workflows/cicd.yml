@@ -10,7 +10,7 @@ on:
 env:
   REGISTRY: ghcr.io
 
-# 개발 중 연속 push로 인한 자동 캔슬 방지
+# 개발 중 연속 push 자동 캔슬 방지(원하면 true로 변경)
 concurrency:
   group: ci-cd-${{ github.ref }}
   cancel-in-progress: false
@@ -297,15 +297,17 @@ jobs:
             mkdir -p "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             echo "[ok] created or exists: ${{ env.DEPLOY_REMOTE_APP_DIR }}"
 
-      - name: Upload bundle to server (include dotfiles)
+      # A안: 업로드 평탄화(폴더명 제거). 두 파일을 명시 + strip_components: 1
+      - name: Upload bundle to server (flatten)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
-          source: "deploy_bundle/**"             # .env 포함
+          source: "deploy_bundle/docker-compose-prod.yml,deploy_bundle/.env"
           target: ${{ env.DEPLOY_REMOTE_APP_DIR }}
+          strip_components: 1
 
       - name: Verify remote files
         uses: appleboy/ssh-action@v1.2.0
@@ -316,7 +318,6 @@ jobs:
           port: ${{ env.DEPLOY_SSH_PORT }}
           script: |
             set -e
-            echo "[ls] ${{ env.DEPLOY_REMOTE_APP_DIR }}"
             ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
             test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/.env" || { echo "MISSING .env"; exit 1; }
