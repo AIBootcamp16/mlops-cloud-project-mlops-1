@@ -321,10 +321,10 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
           script: |
-          set -e
-          ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
-          test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
-          test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/.env" || { echo "MISSING .env"; exit 1; }
+            set -e
+            ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
+            test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/.env" || { echo "MISSING .env"; exit 1; }
 
       # ===== 포트 충돌 방지: 사전 정리 로직 추가 (재발 방지) =====
       - name: Preflight cleanup (down old stack & free port)
