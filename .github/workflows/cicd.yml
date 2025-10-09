@@ -10,9 +10,10 @@ on:
 env:
   REGISTRY: ghcr.io
 
+# 개발 중 연속 push로 인한 자동 캔슬 방지
 concurrency:
   group: ci-cd-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # -------------------- CI (Lint + Test + Build Check) --------------------
@@ -21,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,10 +41,14 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install deps (for CI)
+        timeout-minutes: 30
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_DEFAULT_TIMEOUT: "60"
         run: |
           python -m pip install --upgrade pip
-          pip install -r infrastructure/docker/requirements.txt
-          pip install pytest
+          pip install --retries 3 --timeout 60 --no-cache-dir --progress-bar off -r infrastructure/docker/requirements.txt
+          pip install --retries 3 --timeout 60 --no-cache-dir --progress-bar off pytest
           # pip install ruff
 
       # - name: Lint
@@ -80,7 +86,7 @@ jobs:
         with:
           context: .
           file: infrastructure/docker/Dockerfile.fastapi
-          push: false
+        push: false
 
       - name: Build check - monitoring
         uses: docker/build-push-action@v6
@@ -265,9 +271,10 @@ jobs:
           mkdir -p deploy_bundle
           cp infrastructure/docker/docker-compose-prod.yml deploy_bundle/
           cp .env deploy_bundle/
+          echo "[local bundle]"
           ls -al deploy_bundle
 
-      - name: Write SSH key to file
+      - name: Write SSH key to file (for ssh-keyscan only)
         shell: bash
         run: |
           mkdir -p ~/.ssh
@@ -290,17 +297,17 @@ jobs:
             mkdir -p "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             echo "[ok] created or exists: ${{ env.DEPLOY_REMOTE_APP_DIR }}"
 
-      - name: Upload bundle to server
+      - name: Upload bundle to server (include dotfiles)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
-          source: "deploy_bundle/*"
+          source: "deploy_bundle/**"             # .env 포함
           target: ${{ env.DEPLOY_REMOTE_APP_DIR }}
 
-      - name: Compose pull & up on server
+      - name: Verify remote files
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -309,9 +316,25 @@ jobs:
           port: ${{ env.DEPLOY_SSH_PORT }}
           script: |
             set -e
-            cd "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            echo "[ls] ${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
+            test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/.env" || { echo "MISSING .env"; exit 1; }
+
+      - name: Compose pull & up on server (absolute path)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ env.DEPLOY_SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ env.DEPLOY_SSH_PORT }}
+          script: |
+            set -e
             export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+            FILE="${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml"
             echo "Using IMAGE_TAG=${IMAGE_TAG}"
-            docker compose -f docker-compose-prod.yml pull
-            docker compose -f docker-compose-prod.yml up -d
-            docker compose -f docker-compose-prod.yml ps
+            echo "Compose file=${FILE}"
+            test -f "${FILE}" || { echo "compose file missing: ${FILE}"; exit 1; }
+            docker compose -f "${FILE}" pull
+            docker compose -f "${FILE}" up -d
+            docker compose -f "${FILE}" ps
