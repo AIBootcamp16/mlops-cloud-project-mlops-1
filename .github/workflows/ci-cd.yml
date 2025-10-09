@@ -1,0 +1,316 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: ["main"]                  # PR에서는 CI만 수행
+  push:
+    branches: ["main"]                  # main push 시 CI -> Build&Push -> (조건)Deploy
+  workflow_dispatch:                    # 수동 실행도 배포 허용
+
+env:
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------- CI (Lint + Test + Build Check) --------------------
+  ci:
+    name: CI - Lint & Test & BuildCheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('infrastructure/docker/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps (for CI)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r infrastructure/docker/requirements.txt
+          pip install pytest
+          # pip install ruff
+
+      # - name: Lint
+      #   run: ruff check .
+
+      - name: Run smoke tests
+        run: pytest -q tests/test_smoke.py
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # build-check (이미지 빌드 가능성만 확인; push: false)
+      - name: Build check - mlflow
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.mlflow
+          push: false
+
+      - name: Build check - analysis
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.analysis
+          push: false
+
+      - name: Build check - airflow
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.airflow
+          push: false
+
+      - name: Build check - api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.fastapi
+          push: false
+
+      - name: Build check - monitoring
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.monitoring
+          push: false
+
+  # -------------------- Build & Push (GHCR) --------------------
+  build-and-push:
+    name: Build & Push Images
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.resolve_tag.outputs.image_tag }}
+      owner_lc:  ${{ steps.norm.outputs.owner_lc }}
+      repo_lc:   ${{ steps.norm.outputs.repo_lc }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # IMAGE_TAG: secrets.IMAGE_TAG 있으면 사용, 없으면 GITHUB_SHA
+      - id: resolve_tag
+        name: Resolve IMAGE_TAG
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.IMAGE_TAG }}" ]; then
+            TAG="${{ secrets.IMAGE_TAG }}"
+          else
+            TAG="${GITHUB_SHA}"
+          fi
+          echo "IMAGE_TAG=${TAG}" >> $GITHUB_ENV
+          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Resolved IMAGE_TAG=${TAG}"
+
+      - id: norm
+        name: Normalize owner/repo to lowercase
+        shell: bash
+        run: |
+          NS="${GITHUB_REPOSITORY%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          OWNER_LC=$(echo "$NS"  | tr '[:upper:]' '[:lower:]')
+          REPO_LC=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=${OWNER_LC}" >> $GITHUB_ENV
+          echo "REPO_LC=${REPO_LC}"   >> $GITHUB_ENV
+          echo "owner_lc=${OWNER_LC}" >> $GITHUB_OUTPUT
+          echo "repo_lc=${REPO_LC}"   >> $GITHUB_OUTPUT
+          echo "Namespace: ${NS} -> ${OWNER_LC}"
+          echo "Repo     : ${REPO} -> ${REPO_LC}"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Push - mlflow
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.mlflow
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-mlflow:${{ env.IMAGE_TAG }}
+
+      - name: Build & Push - analysis
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.analysis
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-analysis:${{ env.IMAGE_TAG }}
+
+      - name: Build & Push - airflow
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.airflow
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-airflow:${{ env.IMAGE_TAG }}
+
+      - name: Build & Push - api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.fastapi
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-api:${{ env.IMAGE_TAG }}
+
+      - name: Build & Push - monitoring
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/Dockerfile.monitoring
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.REPO_LC }}-monitoring:${{ env.IMAGE_TAG }}
+
+  # -------------------- Deploy (Compose on remote) --------------------
+  deploy:
+    name: Deploy to Server
+    needs: build-and-push
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      IMAGE_TAG:  ${{ needs.build-and-push.outputs.image_tag }}
+      OWNER_LC:   ${{ needs.build-and-push.outputs.owner_lc }}
+      REPO_LC:    ${{ needs.build-and-push.outputs.repo_lc }}
+      # 기본값 처리(Secrets > Vars > fallback)
+      DEPLOY_SSH_PORT: ${{ secrets.SSH_PORT && secrets.SSH_PORT || '22' }}
+      DEPLOY_SSH_USER: ${{ secrets.SSH_USER || vars.SSH_USER || 'ubuntu' }}
+      DEPLOY_REMOTE_APP_DIR: ${{ secrets.REMOTE_APP_DIR || vars.REMOTE_APP_DIR || '/srv/covid-mlops' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print context (debug)
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "IMAGE_TAG=${IMAGE_TAG}"
+          echo "DEPLOY_SSH_USER=${DEPLOY_SSH_USER}"
+          echo "DEPLOY_SSH_PORT=${DEPLOY_SSH_PORT}"
+          echo "DEPLOY_REMOTE_APP_DIR=${DEPLOY_REMOTE_APP_DIR}"
+
+      - name: Validate required secrets (existence only)
+        shell: bash
+        run: |
+          check() { [ -n "$1" ] || { echo "❌ Missing: $2"; exit 1; }; }
+          # 반드시 secret로 관리(대체 불가)
+          check "${{ secrets.SSH_HOST }}" "SSH_HOST (secret)"
+          check "${{ secrets.SSH_KEY }}"  "SSH_KEY (secret)"
+          echo "✅ required secrets present"
+          echo "ℹ️ Using SSH_USER=${{ env.DEPLOY_SSH_USER }}"
+          echo "ℹ️ Using REMOTE_APP_DIR=${{ env.DEPLOY_REMOTE_APP_DIR }}"
+          echo "ℹ️ Using SSH_PORT=${{ env.DEPLOY_SSH_PORT }}"
+
+      - name: Create .env for services
+        run: |
+          cat > .env << 'EOF'
+          # ===== Runtime environment for docker-compose-prod.yml =====
+          MLFLOW_TRACKING_URI=http://mlflow:5000
+          MLFLOW_BACKEND_STORE_URI=${{ secrets.MLFLOW_BACKEND_STORE_URI }}
+          MLFLOW_DEFAULT_ARTIFACT_ROOT=${{ secrets.MLFLOW_DEFAULT_ARTIFACT_ROOT }}
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION }}
+          S3_BUCKET=${{ secrets.S3_BUCKET }}
+          PROJECT_PATH=/workspace
+          PYTHONPATH=/workspace/src
+          AIRFLOW__CORE__DAGS_FOLDER=/workspace/src/dags
+          AIRFLOW__CORE__LOAD_EXAMPLES=False
+          AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+          AIRFLOW_STORE_URI=${{ secrets.AIRFLOW_STORE_URI }}
+          COVID_TARGET=new_cases
+          COVID_TEST_DAYS=60
+          COVID_HORIZON=30
+          USE_OWID_DIRECT=true
+          AUTO_PREDICT_WINDOW=30
+          DATA_CUTOFF_DATE=
+          MAX_FORECAST_DAYS=30
+          TRAIN_START_DATE=
+          TRAIN_END_DATE=
+          PREDICT_START_DATE=
+          EOF
+
+      - name: Verify files before SCP
+        run: |
+          echo "PWD=$(pwd)"
+          ls -al
+          ls -al infrastructure/docker || true
+          test -f infrastructure/docker/docker-compose-prod.yml || (echo "compose missing" && exit 1)
+          test -f .env || (echo ".env missing" && exit 1)
+
+      - name: Write SSH key to file
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Add host to known_hosts
+        shell: bash
+        run: |
+          ssh-keyscan -p "${DEPLOY_SSH_PORT}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Ensure remote dir exists
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ env.DEPLOY_SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ env.DEPLOY_SSH_PORT }}
+          script: |
+            mkdir -p "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            echo "[ok] created or exists: ${{ env.DEPLOY_REMOTE_APP_DIR }}"
+
+      - name: Upload compose & env to server
+        uses: appleboy/scp-action@v0.1.8
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ env.DEPLOY_SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ env.DEPLOY_SSH_PORT }}
+          # 콤마 구분자로 안전하게 전달 (멀티라인 들여쓰기 이슈 회피)
+          source: "infrastructure/docker/docker-compose-prod.yml,.env"
+          target: ${{ env.DEPLOY_REMOTE_APP_DIR }}
+
+      - name: Compose pull & up on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ env.DEPLOY_SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ env.DEPLOY_SSH_PORT }}
+          script: |
+            set -e
+            cd "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+            export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+            export OWNER_LC="${{ env.OWNER_LC }}"
+            export REPO_LC="${{ env.REPO_LC }}"
+            echo "Using IMAGE_TAG=${IMAGE_TAG}"
+            docker compose -f infrastructure/docker/docker-compose-prod.yml pull
+            docker compose -f infrastructure/docker/docker-compose-prod.yml up -d
+            docker compose -f infrastructure/docker/docker-compose-prod.yml ps
