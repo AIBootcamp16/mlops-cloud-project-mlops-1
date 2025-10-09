@@ -252,6 +252,21 @@ jobs:
           PREDICT_START_DATE=
           EOF
 
+      - name: Verify files before bundling
+        run: |
+          ls -al .
+          ls -al infrastructure/docker || true
+          test -f infrastructure/docker/docker-compose-prod.yml && echo "compose OK" || { echo "compose MISSING"; exit 1; }
+          test -f .env && echo ".env OK" || { echo ".env MISSING"; exit 1; }
+
+      - name: Stage deploy bundle
+        run: |
+          rm -rf deploy_bundle
+          mkdir -p deploy_bundle
+          cp infrastructure/docker/docker-compose-prod.yml deploy_bundle/
+          cp .env deploy_bundle/
+          ls -al deploy_bundle
+
       - name: Write SSH key to file
         shell: bash
         run: |
@@ -275,16 +290,14 @@ jobs:
             mkdir -p "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             echo "[ok] created or exists: ${{ env.DEPLOY_REMOTE_APP_DIR }}"
 
-      - name: Upload compose & env to server
+      - name: Upload bundle to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
-          source: |
-            infrastructure/docker/docker-compose-prod.yml
-            .env
+          source: "deploy_bundle/*"
           target: ${{ env.DEPLOY_REMOTE_APP_DIR }}
 
       - name: Compose pull & up on server
@@ -299,6 +312,6 @@ jobs:
             cd "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             export IMAGE_TAG="${{ env.IMAGE_TAG }}"
             echo "Using IMAGE_TAG=${IMAGE_TAG}"
-            docker compose -f infrastructure/docker/docker-compose-prod.yml pull
-            docker compose -f infrastructure/docker/docker-compose-prod.yml up -d
-            docker compose -f infrastructure/docker/docker-compose-prod.yml ps
+            docker compose -f docker-compose-prod.yml pull
+            docker compose -f docker-compose-prod.yml up -d
+            docker compose -f docker-compose-prod.yml ps
