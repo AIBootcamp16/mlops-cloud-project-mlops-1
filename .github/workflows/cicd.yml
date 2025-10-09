@@ -10,7 +10,7 @@ on:
 env:
   REGISTRY: ghcr.io
 
-# 개발 중 연속 push 자동 캔슬 방지(원하면 true로 변경)
+# 연속 push 자동 캔슬 방지(원하면 true로 변경)
 concurrency:
   group: ci-cd-${{ github.ref }}
   cancel-in-progress: false
@@ -205,6 +205,8 @@ jobs:
       DEPLOY_SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
       DEPLOY_SSH_USER: ${{ secrets.SSH_USER || vars.SSH_USER || 'ubuntu' }}
       DEPLOY_REMOTE_APP_DIR: ${{ secrets.REMOTE_APP_DIR || vars.REMOTE_APP_DIR || '/srv/covid-mlops' }}
+      # mlflow 호스트 바인딩 포트(충돌 정리 시 사용). 필요 시 Secrets/Vars로 오버라이드.
+      DEPLOY_MLFLOW_PORT: ${{ secrets.MLFLOW_HOST_PORT || vars.MLFLOW_HOST_PORT || 5000 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -217,6 +219,7 @@ jobs:
           echo "DEPLOY_SSH_USER=${DEPLOY_SSH_USER}"
           echo "DEPLOY_SSH_PORT=${DEPLOY_SSH_PORT}"
           echo "DEPLOY_REMOTE_APP_DIR=${DEPLOY_REMOTE_APP_DIR}"
+          echo "DEPLOY_MLFLOW_PORT=${DEPLOY_MLFLOW_PORT}"
 
       - name: Validate required secrets/vars (existence)
         shell: bash
@@ -229,6 +232,7 @@ jobs:
           echo "ℹ️ Using SSH_USER=${{ env.DEPLOY_SSH_USER }}"
           echo "ℹ️ Using REMOTE_APP_DIR=${{ env.DEPLOY_REMOTE_APP_DIR }}"
           echo "ℹ️ Using SSH_PORT=${{ env.DEPLOY_SSH_PORT }}"
+          echo "ℹ️ Using MLFLOW_PORT=${{ env.DEPLOY_MLFLOW_PORT }}"
 
       - name: Create .env from Secrets
         run: |
@@ -297,7 +301,7 @@ jobs:
             mkdir -p "${{ env.DEPLOY_REMOTE_APP_DIR }}"
             echo "[ok] created or exists: ${{ env.DEPLOY_REMOTE_APP_DIR }}"
 
-      # A안: 업로드 평탄화(폴더명 제거). 두 파일을 명시 + strip_components: 1
+      # 평탄화 업로드: 폴더명 제거, dotfile(.env) 포함
       - name: Upload bundle to server (flatten)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -316,11 +320,35 @@ jobs:
           username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
+        script: |
+          set -e
+          ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
+          test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
+          test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/.env" || { echo "MISSING .env"; exit 1; }
+
+      # ===== 포트 충돌 방지: 사전 정리 로직 추가 (재발 방지) =====
+      - name: Preflight cleanup (down old stack & free port)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ env.DEPLOY_SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ env.DEPLOY_SSH_PORT }}
           script: |
             set -e
-            ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
-            test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
-            test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/.env" || { echo "MISSING .env"; exit 1; }
+            FILE="${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml"
+            P="${{ env.DEPLOY_MLFLOW_PORT }}"
+            echo "[preflight] compose file=${FILE}, free port=${P}"
+            # 이전 스택/고아 컨테이너 정리
+            docker compose -f "${FILE}" down --remove-orphans || true
+            # 포트 점유 컨테이너 강제 종료
+            CID=$(docker ps -q --filter "publish=${P}" || true)
+            if [ -n "$CID" ]; then
+              echo "[preflight] stopping container(s) using :${P} -> $CID"
+              docker stop $CID || true
+            fi
+            # 혹시 남아있는 프로세스 확인(정보용)
+            ss -ltnp | grep ":${P}" || true
 
       - name: Compose pull & up on server (absolute path)
         uses: appleboy/ssh-action@v1.2.0
