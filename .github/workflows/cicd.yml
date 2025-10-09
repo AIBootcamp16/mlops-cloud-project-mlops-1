@@ -320,7 +320,7 @@ jobs:
           username: ${{ env.DEPLOY_SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ env.DEPLOY_SSH_PORT }}
-        script: |
+          script: |
           set -e
           ls -al "${{ env.DEPLOY_REMOTE_APP_DIR }}"
           test -f "${{ env.DEPLOY_REMOTE_APP_DIR }}/docker-compose-prod.yml" || { echo "MISSING compose"; exit 1; }
